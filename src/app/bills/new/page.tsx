@@ -22,7 +22,7 @@ import {
   UserOutlined,
   CalendarOutlined 
 } from '@ant-design/icons';
-import { getUsers, addBill } from '../../../services/dataService';
+import { getUsers, addBill, yuanToFen, fenToYuan } from '../../../services/dataService';
 import { User, CurrencyType, BillStatus, BillShare } from '../../../types';
 
 export default function NewBill() {
@@ -58,6 +58,7 @@ export default function NewBill() {
   const handleSplitEvenly = () => {
     const totalAmount = form.getFieldValue('totalAmount') || 0;
     const createdBy = form.getFieldValue('createdBy');
+    const currency = form.getFieldValue('currency') || CurrencyType.CNY;
     
     if (totalAmount <= 0) {
       message.warning('请先输入总金额');
@@ -69,36 +70,66 @@ export default function NewBill() {
       return;
     }
     
-    // 计算每人应付金额（精确到两位小数）
-    const amountPerPerson = parseFloat((totalAmount / selectedUsers.length).toFixed(2));
-    
-    // 计算向下取整后的总金额
-    let baseAllocatedAmount = parseFloat((amountPerPerson * selectedUsers.length).toFixed(2));
-    
-    // 计算剩余的差额
-    let difference = parseFloat((totalAmount - baseAllocatedAmount).toFixed(2));
-    
-    // 需要增加的小数部分
-    let adjustment = 0;
-    if (difference > 0) {
-      // 将difference转换为分，四舍五入
-      adjustment = Math.round(difference * 100);
+    if (!createdBy) {
+      message.warning('请先选择创建人');
+      return;
     }
+    
+    // 先将金额转为整数（分）
+    const totalAmountInFen = yuanToFen(totalAmount, currency);
+    
+    // 找出创建者索引
+    const creatorIndex = selectedUsers.indexOf(createdBy);
+    
+    if (creatorIndex === -1) {
+      message.warning('创建人必须是参与用户');
+      return;
+    }
+    
+    // 计算每人应付金额（整数分）
+    let amountPerPersonInFen = Math.floor(totalAmountInFen / selectedUsers.length);
+    if (totalAmountInFen % selectedUsers.length !== 0) {
+      amountPerPersonInFen += 1;
+    }
+    
+    // 非创建者的总金额
+    let totalNonCreatorAmount = 0;
     
     // 创建分账
     const shares = selectedUsers.map((userId, index) => {
-      let amount = amountPerPerson;
-      
-      // 前adjustment个用户多付0.01元
-      if (index < adjustment) {
-        amount = parseFloat((amount + 0.01).toFixed(2));
+      // 如果不是创建者，分配基本金额
+      if (userId !== createdBy) {
+        totalNonCreatorAmount += amountPerPersonInFen;
+        
+        // 将整数分转回显示用的元
+        const displayAmount = parseFloat(fenToYuan(amountPerPersonInFen, currency));
+        
+        return {
+          userId,
+          amount: displayAmount,
+          paid: false
+        };
+      } else {
+        // 先填入0，稍后再更新
+        return {
+          userId,
+          amount: 0,
+          paid: true // 创建者自动标记为已付款
+        };
       }
-      
-      return {
-        userId,
-        amount,
-        paid: userId === createdBy // 如果是创建者，自动标记为已付款
-      };
+    });
+    
+    // 创建者承担余额（总金额减去其他人的份额）
+    const creatorAmountInFen = totalAmountInFen - totalNonCreatorAmount;
+    
+    // 将整数分转回显示用的元
+    const creatorDisplayAmount = parseFloat(fenToYuan(creatorAmountInFen, currency));
+    
+    // 更新创建者的金额
+    shares.forEach(share => {
+      if (share.userId === createdBy) {
+        share.amount = creatorDisplayAmount;
+      }
     });
     
     // 更新表单
@@ -108,11 +139,13 @@ export default function NewBill() {
   // 提交表单
   const handleSubmit = (values: any) => {
     const createdBy = values.createdBy;
+    const currency = values.currency;
     
     // 确保分账金额总和等于总金额
     const totalAmount = values.totalAmount;
     const sharesTotal = values.shares.reduce((sum: number, share: BillShare) => sum + share.amount, 0);
     
+    // 允许有小误差（小于1分钱）
     if (Math.abs(totalAmount - sharesTotal) > 0.01) {
       message.error('分账金额总和必须等于总金额');
       return;
@@ -122,7 +155,7 @@ export default function NewBill() {
     const bill = {
       title: values.title,
       description: values.description,
-      totalAmount: values.totalAmount,
+      totalAmount: totalAmount, // 这里传入的是显示金额（元），服务层会转为整数（分）
       createdBy: values.createdBy,
       status: BillStatus.PENDING,
       shares: values.shares,

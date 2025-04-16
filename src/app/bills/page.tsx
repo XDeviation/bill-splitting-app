@@ -7,7 +7,8 @@ import {
   batchUpdateBills, 
   getBillsByUser,
   mergeBillsByCurrency,
-  getUserName
+  getUserName,
+  fenToYuan
 } from '../../services/dataService';
 import { Bill, User, CurrencyType } from '../../types';
 import { 
@@ -50,6 +51,7 @@ export default function BillsPage() {
   const [filterUser, setFilterUser] = useState<string>('');
   const [filterType, setFilterType] = useState<'all' | 'toPay' | 'toReceive'>('all');
   const [filterCurrency, setFilterCurrency] = useState<CurrencyType | ''>('');
+  const [merging, setMerging] = useState(false);
   const { message: messageApi } = App.useApp();
 
   // 加载数据
@@ -100,31 +102,40 @@ export default function BillsPage() {
   };
 
   // 处理一键合账
-  const handleMergeBills = () => {
-    const result = mergeBillsByCurrency();
-    const currencies = Object.keys(result);
+  const handleMergeBills = async () => {
+    // 设置合并中状态，禁用按钮
+    setMerging(true);
     
-    if (currencies.length === 0 || currencies.every(currency => !result[currency as CurrencyType]?.length)) {
-      messageApi.warning('没有可合并的账单，需要至少两个相同币种的待付款账单');
-      return;
-    }
-    
-    // 计算合并的账单数量
-    let totalBillsMerged = 0;
-    currencies.forEach(currency => {
-      const currencyBills = result[currency as CurrencyType] || [];
-      totalBillsMerged += currencyBills.length;
-    });
-    
-    // 展示合并结果
-    const successMsg = `成功创建 ${totalBillsMerged} 个合并账单`;
-    
-    messageApi.success(successMsg);
-    
-    // 重新加载数据以显示合并后的账单
-    setTimeout(() => {
+    try {
+      const result = await mergeBillsByCurrency();
+      const currencies = Object.keys(result);
+      
+      if (currencies.length === 0 || currencies.every(currency => !result[currency as CurrencyType]?.length)) {
+        messageApi.warning('没有可合并的账单，需要至少两个相同币种的待付款账单');
+        return;
+      }
+      
+      // 计算合并的账单数量
+      let totalBillsMerged = 0;
+      currencies.forEach(currency => {
+        const currencyBills = result[currency as CurrencyType] || [];
+        totalBillsMerged += currencyBills.length;
+      });
+      
+      // 展示合并结果
+      const successMsg = `成功创建 ${totalBillsMerged} 个合并账单`;
+      
+      messageApi.success(successMsg);
+      
+      // 重新加载数据以显示合并后的账单
       loadData();
-    }, 500);
+    } catch (error) {
+      console.error("合并账单失败:", error);
+      messageApi.error('合并账单失败，请稍后重试');
+    } finally {
+      // 无论成功失败，都恢复按钮状态
+      setMerging(false);
+    }
   };
 
   // 表格行选择配置
@@ -149,7 +160,7 @@ export default function BillsPage() {
       key: 'totalAmount',
       width: '15%',
       render: (amount: number, record: Bill) => 
-        `${amount.toFixed(record.currency === CurrencyType.JPY ? 0 : 2)} ${record.currency}`,
+        `${fenToYuan(amount, record.currency)} ${record.currency}`,
     },
     {
       title: '货币',
@@ -318,6 +329,8 @@ export default function BillsPage() {
               type="default" 
               icon={<NodeIndexOutlined />} 
               onClick={handleMergeBills}
+              loading={merging}
+              disabled={merging}
             >
               一键合账
             </Button>
