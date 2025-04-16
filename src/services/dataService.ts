@@ -67,20 +67,11 @@ export const getBills = (): Bill[] => {
 
 // 将元转换为分（整数）
 export const yuanToFen = (yuan: number, currency: CurrencyType): number => {
-  // 人民币：1元 = 100分，保留2位小数
-  // 日元：本身就是整数，不需要转换
-  if (currency === CurrencyType.JPY) {
-    return Math.round(yuan);
-  }
   return Math.round(yuan * 100);
 };
 
 // 将分转换为元（显示用）
 export const fenToYuan = (fen: number, currency: CurrencyType): string => {
-  if (currency === CurrencyType.JPY) {
-    return `${fen}`;
-  }
-  // 人民币：100分 = 1元，显示2位小数
   return (fen / 100).toFixed(2);
 };
 
@@ -554,7 +545,7 @@ export const mergeBillsByCurrency = (): Promise<{ [key in CurrencyType]?: Bill[]
         const totalAmount = creditorShares.reduce((sum, share) => sum + share.amount, 0);
         
         // 如果总金额太小，则不创建账单
-        if (totalAmount < 0.01) {
+        if (totalAmount < 1) { // 改为1分（整数）
           pendingOperations--;
           checkIfDone();
           return;
@@ -573,9 +564,9 @@ export const mergeBillsByCurrency = (): Promise<{ [key in CurrencyType]?: Bill[]
         const mergedBill: Omit<Bill, 'id' | 'createdAt'> = {
           title: finalTitle,
           description: `自动合并的${currencyType}账单，收款人: ${creditorName}，包含${currencyBills.length}个原始账单`,
-          totalAmount: totalAmount, // 总金额已经是整数分
-          createdBy: creditorId, // 将当前处理的收款人设为创建者
-          status: BillStatus.PENDING, // 直接标记为待付款状态
+          totalAmount: totalAmount, // 总金额已经是整数分，无需再转换
+          createdBy: creditorId, 
+          status: BillStatus.PENDING, 
           shares: creditorShares,
           currency: currencyType,
         };
@@ -583,8 +574,19 @@ export const mergeBillsByCurrency = (): Promise<{ [key in CurrencyType]?: Bill[]
         try {
           // 确保在多次快速操作时ID不会冲突，添加小延迟
           setTimeout(() => {
+            // 添加合并账单前先将金额转回显示单位，因为addBill会再次进行转换
+            // 这样可以避免重复转换问题
+            const displayMergedBill = {
+              ...mergedBill,
+              totalAmount: parseFloat(fenToYuan(mergedBill.totalAmount, mergedBill.currency)),
+              shares: mergedBill.shares.map(share => ({
+                ...share,
+                amount: parseFloat(fenToYuan(share.amount, mergedBill.currency))
+              }))
+            };
+            
             // 添加合并账单
-            const newBill = addBill(mergedBill);
+            const newBill = addBill(displayMergedBill);
             
             // 将新创建的账单添加到结果中
             if (!result[currencyType]) {
