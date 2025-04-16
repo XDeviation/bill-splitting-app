@@ -2,6 +2,7 @@ export enum BillStatus {
   UNPAID = 'unpaid',     // 未出账
   PENDING = 'pending',   // 待付款
   COMPLETED = 'completed', // 已完成
+  MERGED = 'merged',     // 已合账
 }
 
 export enum CurrencyType {

@@ -1,7 +1,14 @@
 'use client';
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { getBills, getUsers, batchUpdateBills, getBillsByUser } from '../../services/dataService';
+import { 
+  getBills, 
+  getUsers, 
+  batchUpdateBills, 
+  getBillsByUser,
+  mergeBillsByCurrency,
+  getUserName
+} from '../../services/dataService';
 import { Bill, User, CurrencyType } from '../../types';
 import { 
   Table, 
@@ -31,7 +38,8 @@ import {
   CheckCircleOutlined,
   ClockCircleOutlined,
   ExclamationCircleOutlined,
-  DollarOutlined
+  DollarOutlined,
+  NodeIndexOutlined
 } from '@ant-design/icons';
 
 export default function BillsPage() {
@@ -71,12 +79,6 @@ export default function BillsPage() {
     loadData();
   }, [filterUser, filterType, filterCurrency]);
 
-  // 获取用户名称
-  const getUserName = (userId: string) => {
-    const user = users.find(u => u.id === userId);
-    return user ? user.name : '未知用户';
-  };
-
   // 批量操作
   const handleBatchAction = (action: 'markAsPending' | 'markAsCompleted') => {
     if (selectedRowKeys.length === 0) {
@@ -95,6 +97,25 @@ export default function BillsPage() {
     messageApi.success(successMsg);
     loadData();
     setSelectedRowKeys([]);
+  };
+
+  // 处理一键合账
+  const handleMergeBills = () => {
+    const result = mergeBillsByCurrency();
+    const currencies = Object.keys(result);
+    
+    if (currencies.length === 0) {
+      messageApi.warning('没有可合并的账单，需要至少两个相同币种的待付款账单');
+      return;
+    }
+    
+    // 展示合并结果
+    const successMsg = currencies.map(currency => 
+      `已合并 ${currency} 账单，生成新账单: ${result[currency as CurrencyType]?.title}`
+    ).join('; ');
+    
+    messageApi.success(successMsg);
+    loadData();
   };
 
   // 表格行选择配置
@@ -137,12 +158,22 @@ export default function BillsPage() {
       dataIndex: 'createdBy',
       key: 'createdBy',
       width: '15%',
-      render: (userId: string) => (
-        <div style={{ display: 'flex', alignItems: 'center' }}>
-          <Avatar size="small" icon={<UserOutlined />} style={{ marginRight: 8 }} />
-          {getUserName(userId)}
-        </div>
-      ),
+      render: (userId: string) => {
+        if (!userId) {
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', color: '#999' }}>
+              <Avatar size="small" icon={<NodeIndexOutlined />} style={{ marginRight: 8, backgroundColor: '#d9d9d9' }} />
+              系统合账
+            </div>
+          );
+        }
+        return (
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            <Avatar size="small" icon={<UserOutlined />} style={{ marginRight: 8 }} />
+            {getUserName(userId)}
+          </div>
+        );
+      },
     },
     {
       title: '创建时间',
@@ -161,6 +192,7 @@ export default function BillsPage() {
           unpaid: { color: 'warning', text: '未出账', icon: <ExclamationCircleOutlined /> },
           pending: { color: 'processing', text: '出账', icon: <ClockCircleOutlined /> },
           completed: { color: 'success', text: '完成', icon: <CheckCircleOutlined /> },
+          merged: { color: 'default', text: '已合账', icon: <NodeIndexOutlined /> },
         };
         const statusInfo = statusConfig[status as keyof typeof statusConfig];
         return (
@@ -272,6 +304,14 @@ export default function BillsPage() {
                 筛选 <DownOutlined />
               </Button>
             </Dropdown>
+            
+            <Button 
+              type="default" 
+              icon={<NodeIndexOutlined />} 
+              onClick={handleMergeBills}
+            >
+              一键合账
+            </Button>
             
             <Dropdown
               disabled={selectedRowKeys.length === 0}

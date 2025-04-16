@@ -335,4 +335,117 @@ export const deleteBill = (billId: string): boolean => {
   
   localStorage.setItem(STORAGE_KEYS.BILLS, JSON.stringify(filteredBills));
   return true;
+};
+
+// 一键合账功能
+export const mergeBillsByCurrency = (): { [key in CurrencyType]?: Bill } => {
+  const bills = getBills();
+  const pendingBills = bills.filter(bill => bill.status === BillStatus.PENDING);
+  const result: { [key in CurrencyType]?: Bill } = {};
+  
+  // 按币种分组
+  const billsByCurrency: Record<CurrencyType, Bill[]> = {
+    [CurrencyType.CNY]: [],
+    [CurrencyType.JPY]: [],
+  };
+  
+  pendingBills.forEach(bill => {
+    billsByCurrency[bill.currency].push(bill);
+  });
+  
+  // 处理每一种货币类型
+  Object.entries(billsByCurrency).forEach(([currency, currencyBills]) => {
+    if (currencyBills.length <= 1) return; // 至少要有两个账单才需要合并
+    
+    const currencyType = currency as CurrencyType;
+    const users = getUsers();
+    
+    // 计算用户净收支，正值表示需要收钱，负值表示需要付钱
+    const userBalances: Record<string, number> = {};
+    
+    // 初始化余额
+    users.forEach(user => {
+      userBalances[user.id] = 0;
+    });
+    
+    // 计算每个用户在所有待付款账单中的净收支
+    currencyBills.forEach(bill => {
+      // 收款人（创建者）收取的金额
+      let creatorReceives = 0;
+      
+      bill.shares.forEach(share => {
+        if (!share.paid) { // 只考虑未支付的部分
+          // 付款人减去应付金额
+          userBalances[share.userId] -= share.amount;
+          // 统计创建者应收取的金额
+          creatorReceives += share.amount;
+        }
+      });
+      
+      // 创建者增加应收金额
+      userBalances[bill.createdBy] += creatorReceives;
+    });
+    
+    // 生成新的合并账单
+    // 只有收款方（余额为正）的用户作为创建者
+    const creditors = Object.entries(userBalances)
+      .filter(([_, balance]) => balance > 0)
+      .sort((a, b) => b[1] - a[1]); // 按金额降序
+    
+    if (creditors.length === 0) return; // 如果没有净收款方，则不需要合并
+    
+    // 选择收款金额最大的用户作为创建者
+    const [creatorId, _] = creditors[0];
+    
+    // 找出所有需要付款的用户（余额为负）
+    const debtors = Object.entries(userBalances)
+      .filter(([userId, balance]) => balance < 0 && userId !== creatorId); // 余额为负且不是创建者
+    
+    if (debtors.length === 0) return; // 如果没有净付款方，则不需要合并
+    
+    // 创建分账
+    const shares = debtors.map(([userId, balance]) => ({
+      userId,
+      amount: Math.abs(balance), // 取绝对值，因为原值为负
+      paid: false,
+    }));
+    
+    // 创建合并账单的标题
+    const mergedTitle = currencyBills
+      .map(bill => bill.title)
+      .join(' - ');
+    
+    // 创建合并账单
+    const mergedBill: Omit<Bill, 'id' | 'createdAt'> = {
+      title: `合并:${mergedTitle}`,
+      description: `自动合并的${currencyType}账单，包含${currencyBills.length}个原始账单`,
+      totalAmount: shares.reduce((sum, share) => sum + share.amount, 0),
+      createdBy: '', // 设置为空字符串，表示系统创建
+      status: BillStatus.PENDING,
+      shares,
+      currency: currencyType,
+    };
+    
+    // 添加合并账单
+    const newBill = addBill(mergedBill);
+    result[currencyType] = newBill;
+    
+    // 将原始账单标记为已合账
+    currencyBills.forEach(bill => {
+      bill.status = BillStatus.MERGED;
+    });
+    
+    // 更新原始账单状态
+    localStorage.setItem(STORAGE_KEYS.BILLS, JSON.stringify(bills));
+  });
+  
+  return result;
+};
+
+// 在getUserName函数中添加对空用户ID的处理
+export const getUserName = (userId: string): string => {
+  if (!userId) return '系统';
+  
+  const user = getUsers().find(u => u.id === userId);
+  return user ? user.name : '未知用户';
 }; 

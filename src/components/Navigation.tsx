@@ -131,9 +131,23 @@ export default function Navigation() {
         }
         
         .ant-menu-dark.ant-menu-horizontal > .ant-menu-item-selected {
-          background-color: rgba(255, 255, 255, 0.15) !important;
-          border-radius: 4px;
+          background-color: rgba(255, 255, 255, 0.2) !important;
+          border-radius: 8px;
           font-weight: 600;
+          position: relative;
+          box-shadow: 0 0 10px rgba(255, 255, 255, 0.1);
+        }
+        
+        .ant-menu-dark.ant-menu-horizontal > .ant-menu-item-selected::before {
+          content: '';
+          position: absolute;
+          bottom: 0;
+          left: 50%;
+          transform: translateX(-50%);
+          width: 40%;
+          height: 3px;
+          background-color: white;
+          border-radius: 3px 3px 0 0;
         }
         
         .ant-menu-dark.ant-menu-horizontal > .ant-menu-item {
@@ -147,9 +161,15 @@ export default function Navigation() {
         
         .ant-menu-dark.ant-menu-horizontal > .ant-menu-item:hover {
           background-color: rgba(255, 255, 255, 0.1) !important;
-          border-radius: 4px;
+          border-radius: 8px;
           color: #fff;
           text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+        }
+
+        .ant-menu-dark.ant-menu-horizontal > .ant-menu-item-selected .ant-menu-title-content,
+        .ant-menu-dark.ant-menu-horizontal > .ant-menu-item-selected .anticon {
+          transform: scale(1.05);
+          transition: transform 0.3s ease;
         }
         
         .create-bill-btn {
