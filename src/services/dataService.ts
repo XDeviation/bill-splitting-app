@@ -1,4 +1,4 @@
-import { User, Bill, BillStatus, Settlement, CurrencyType } from '../types';
+import { User, Bill, BillStatus, Settlement, CurrencyType, BillShare } from '../types';
 
 // 使用localStorage存储数据
 const STORAGE_KEYS = {
@@ -68,19 +68,108 @@ export const getBills = (): Bill[] => {
 // 添加账单
 export const addBill = (bill: Omit<Bill, 'id' | 'createdAt'>): Bill => {
   const bills = getBills();
+  let shares = [...bill.shares];
+  
+  // 如果需要均分账单
+  if (shares.every(share => share.amount === 0)) {
+    // 计算需要均分的总金额
+    const totalAmount = bill.totalAmount;
+    // 参与分账的总人数
+    const totalParticipants = shares.length;
+    
+    if (totalParticipants > 0) {
+      // 非创建者的人数
+      const nonCreatorCount = shares.filter(share => share.userId !== bill.createdBy).length;
+      
+      if (nonCreatorCount > 0) {
+        // 计算每人应付金额（向下取整到2位小数）
+        let amountPerPerson = Math.floor(totalAmount / totalParticipants * 100) / 100;
+        
+        // 计算向下取整后的总金额
+        let baseAllocatedAmount = amountPerPerson * totalParticipants;
+        
+        // 计算剩余的差额（应该是正数，表示还有多少钱没分配）
+        let difference = parseFloat((totalAmount - baseAllocatedAmount).toFixed(2));
+        
+        // 需要增加0.01的人数
+        let adjustmentCount = Math.round(difference * 100); // 转换为分
+        
+        // 确保不超过非创建者人数
+        adjustmentCount = Math.min(adjustmentCount, nonCreatorCount);
+        
+        // 如果有差额需要调整
+        if (adjustmentCount > 0) {
+          // 创建者支付的基本金额
+          let creatorAmount = amountPerPerson;
+          
+          // 为非创建者分配金额，部分人增加0.01
+          const nonCreatorShares = shares.filter(share => share.userId !== bill.createdBy);
+          const creatorShares = shares.filter(share => share.userId === bill.createdBy);
+          
+          // 处理非创建者分账
+          let updatedNonCreatorShares = nonCreatorShares.map((share, index) => {
+            // 前adjustmentCount个非创建者各多付0.01
+            if (index < adjustmentCount) {
+              // 多付0.01
+              return { ...share, amount: parseFloat((amountPerPerson + 0.01).toFixed(2)) };
+            } else {
+              // 正常付款
+              return { ...share, amount: amountPerPerson };
+            }
+          });
+          
+          // 计算非创建者总支付金额
+          const nonCreatorTotal = updatedNonCreatorShares.reduce((sum, share) => 
+            sum + share.amount, 0);
+          
+          // 创建者支付的金额 = 总金额 - 非创建者总支付金额
+          if (creatorShares.length > 0) {
+            creatorAmount = parseFloat((totalAmount - nonCreatorTotal).toFixed(2));
+            // 防止负数
+            creatorAmount = Math.max(0, creatorAmount);
+          }
+          
+          // 重新组合所有分账
+          shares = [
+            ...updatedNonCreatorShares,
+            ...creatorShares.map(share => ({ ...share, amount: creatorAmount }))
+          ];
+        } else {
+          // 如果不需要调整，所有人平均分配
+          shares = shares.map(share => ({ ...share, amount: amountPerPerson }));
+        }
+      } else {
+        // 如果只有创建者一个人，那么创建者支付全部金额
+        shares = shares.map(share => ({ 
+          ...share, 
+          amount: share.userId === bill.createdBy ? totalAmount : 0 
+        }));
+      }
+      
+      // 再次检查总和是否等于账单总额
+      const totalShares = parseFloat(shares.reduce((sum, share) => sum + share.amount, 0).toFixed(2));
+      if (Math.abs(totalShares - totalAmount) > 0.01) {
+        console.warn(`分账总额(${totalShares})与账单总额(${totalAmount})不匹配，差额: ${totalShares - totalAmount}`);
+      }
+    }
+  }
   
   // 确保创建者的分账标记为已支付
-  const sharesWithCreatorPaid = bill.shares.map(share => {
+  const sharesWithCreatorPaid = shares.map(share => {
     if (share.userId === bill.createdBy) {
       return { ...share, paid: true };
     }
     return share;
   });
   
+  // 生成唯一ID，使用时间戳 + 随机数
+  const uniqueId = `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+  
   const newBill: Bill = {
     ...bill,
-    id: Date.now().toString(),
+    id: uniqueId,
     createdAt: Date.now(),
+    status: bill.status || BillStatus.UNPAID, // 默认为未出账状态
     currency: bill.currency || CurrencyType.CNY, // 默认使用人民币
     shares: sharesWithCreatorPaid
   };
@@ -338,10 +427,13 @@ export const deleteBill = (billId: string): boolean => {
 };
 
 // 一键合账功能
-export const mergeBillsByCurrency = (): { [key in CurrencyType]?: Bill } => {
+export const mergeBillsByCurrency = (): { [key in CurrencyType]?: Bill[] } => {
   const bills = getBills();
   const pendingBills = bills.filter(bill => bill.status === BillStatus.PENDING);
-  const result: { [key in CurrencyType]?: Bill } = {};
+  const result: { [key in CurrencyType]?: Bill[] } = {
+    [CurrencyType.CNY]: [],
+    [CurrencyType.JPY]: [],
+  };
   
   // 按币种分组
   const billsByCurrency: Record<CurrencyType, Bill[]> = {
@@ -386,57 +478,143 @@ export const mergeBillsByCurrency = (): { [key in CurrencyType]?: Bill } => {
       userBalances[bill.createdBy] += creatorReceives;
     });
     
-    // 生成新的合并账单
-    // 只有收款方（余额为正）的用户作为创建者
+    // 调整所有余额为两位小数
+    Object.keys(userBalances).forEach(userId => {
+      userBalances[userId] = parseFloat(userBalances[userId].toFixed(2));
+    });
+    
+    // 获取所有净收款方（余额为正）的用户
     const creditors = Object.entries(userBalances)
       .filter(([_, balance]) => balance > 0)
       .sort((a, b) => b[1] - a[1]); // 按金额降序
     
-    if (creditors.length === 0) return; // 如果没有净收款方，则不需要合并
-    
-    // 选择收款金额最大的用户作为创建者
-    const [creatorId, _] = creditors[0];
-    
-    // 找出所有需要付款的用户（余额为负）
+    // 获取所有需要付款的用户（余额为负）
     const debtors = Object.entries(userBalances)
-      .filter(([userId, balance]) => balance < 0 && userId !== creatorId); // 余额为负且不是创建者
+      .filter(([_, balance]) => balance < 0)
+      .sort((a, b) => a[1] - b[1]); // 按欠款多少排序
     
-    if (debtors.length === 0) return; // 如果没有净付款方，则不需要合并
+    if (creditors.length === 0 || debtors.length === 0) return; // 如果没有净收款方或付款方，则不需要合并
     
-    // 创建分账
-    const shares = debtors.map(([userId, balance]) => ({
-      userId,
-      amount: Math.abs(balance), // 取绝对值，因为原值为负
-      paid: false,
-    }));
+    // 收集要标记为已合账的原始账单ID
+    const originalBillIds = currencyBills.map(bill => bill.id);
     
-    // 创建合并账单的标题
-    const mergedTitle = currencyBills
-      .map(bill => bill.title)
-      .join(' - ');
-    
-    // 创建合并账单
-    const mergedBill: Omit<Bill, 'id' | 'createdAt'> = {
-      title: `合并:${mergedTitle}`,
-      description: `自动合并的${currencyType}账单，包含${currencyBills.length}个原始账单`,
-      totalAmount: shares.reduce((sum, share) => sum + share.amount, 0),
-      createdBy: '', // 设置为空字符串，表示系统创建
-      status: BillStatus.PENDING,
-      shares,
-      currency: currencyType,
-    };
-    
-    // 添加合并账单
-    const newBill = addBill(mergedBill);
-    result[currencyType] = newBill;
-    
-    // 将原始账单标记为已合账
-    currencyBills.forEach(bill => {
-      bill.status = BillStatus.MERGED;
+    // 修复：避免在循环中使用indexOf，因为它可能创建错误的索引
+    // 为每个收款人创建一个合并账单
+    creditors.forEach((creditor, creditorIndex) => {
+      const [creditorId, creditorBalance] = creditor;
+      
+      // 深拷贝付款人列表，以便在处理过程中修改
+      let remainingDebtors = [...debtors];
+      let totalCollectedForCreditor = 0;
+      const creditorShares: BillShare[] = [];
+      
+      // 为该收款人分配欠款人
+      while (remainingDebtors.length > 0 && totalCollectedForCreditor < creditorBalance) {
+        const [debtorId, debtorBalance] = remainingDebtors[0];
+        const absDebtorBalance = Math.abs(debtorBalance);
+        
+        // 计算这个欠款人应该付给当前收款人的金额
+        const amountToAllocate = Math.min(
+          absDebtorBalance, 
+          parseFloat((creditorBalance - totalCollectedForCreditor).toFixed(2))
+        );
+        
+        if (amountToAllocate > 0) {
+          // 添加到该收款人的分账中
+          creditorShares.push({
+            userId: debtorId,
+            amount: parseFloat(amountToAllocate.toFixed(2)),
+            paid: false
+          });
+          
+          // 更新已收集的总金额
+          totalCollectedForCreditor = parseFloat((totalCollectedForCreditor + amountToAllocate).toFixed(2));
+          
+          // 更新欠款人的余额
+          if (Math.abs(absDebtorBalance - amountToAllocate) < 0.01) {
+            // 如果欠款人的债务已经完全分配，则从列表中移除
+            remainingDebtors.shift();
+          } else {
+            // 否则更新欠款人的余额
+            remainingDebtors[0] = [
+              debtorId, 
+              parseFloat((debtorBalance + amountToAllocate).toFixed(2))
+            ];
+          }
+        } else {
+          // 如果无法分配更多金额，跳出循环
+          break;
+        }
+      }
+      
+      // 如果没有分账，则跳过创建账单
+      if (creditorShares.length === 0) return;
+      
+      // 计算总金额
+      const totalAmount = parseFloat(
+        creditorShares.reduce((sum, share) => sum + share.amount, 0).toFixed(2)
+      );
+      
+      // 如果总金额太小，则不创建账单
+      if (totalAmount < 0.01) return;
+      
+      // 创建合并账单的标题
+      const mergedTitle = currencyBills
+        .map(bill => bill.title.substring(0, 10)) // 截取每个标题的前10个字符
+        .join(' + ');
+      
+      // 创建最终标题，添加合并标记和收款人姓名
+      const creditorName = getUserName(creditorId);
+      const finalTitle = `【合并账单-${creditorName}】${mergedTitle}${currencyBills.length > 2 ? '等' : ''}`;
+      
+      // 创建合并账单
+      const mergedBill: Omit<Bill, 'id' | 'createdAt'> = {
+        title: finalTitle,
+        description: `自动合并的${currencyType}账单，收款人: ${creditorName}，包含${currencyBills.length}个原始账单`,
+        totalAmount: totalAmount,
+        createdBy: creditorId, // 将当前处理的收款人设为创建者
+        status: BillStatus.PENDING, // 直接标记为待付款状态
+        shares: creditorShares,
+        currency: currencyType,
+      };
+      
+      try {
+        // 确保在多次快速操作时ID不会冲突，添加小延迟
+        setTimeout(() => {
+          // 添加合并账单
+          const newBill = addBill(mergedBill);
+          
+          // 将新创建的账单添加到结果中
+          if (!result[currencyType]) {
+            result[currencyType] = [];
+          }
+          result[currencyType]?.push(newBill);
+          
+          // 在所有收款人的账单都创建完毕后，将原始账单标记为已合账
+          // 由于是在异步操作中，需要在最外层再处理
+        }, 10 * (creditorIndex + 1)); // 使用索引而不是indexOf来错开时间
+      } catch (error) {
+        console.error(`合并账单创建失败(收款人: ${creditorName}):`, error);
+      }
     });
     
-    // 更新原始账单状态
-    localStorage.setItem(STORAGE_KEYS.BILLS, JSON.stringify(bills));
+    // 在所有收款人的账单都创建完毕后，将原始账单标记为已合账
+    // 添加更长的延迟，确保所有合并账单都已创建
+    setTimeout(() => {
+      // 获取最新的账单列表
+      const allBills = getBills();
+      
+      // 找到原始账单并标记为已合账
+      originalBillIds.forEach(billId => {
+        const billToUpdate = allBills.find(b => b.id === billId);
+        if (billToUpdate) {
+          billToUpdate.status = BillStatus.MERGED;
+        }
+      });
+      
+      // 更新原始账单状态
+      localStorage.setItem(STORAGE_KEYS.BILLS, JSON.stringify(allBills));
+    }, 100); // 使用更长的延迟
   });
   
   return result;

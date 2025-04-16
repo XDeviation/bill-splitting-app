@@ -57,17 +57,52 @@ export default function NewBill() {
   // 处理均分金额
   const handleSplitEvenly = () => {
     const totalAmount = form.getFieldValue('totalAmount') || 0;
-    if (totalAmount > 0 && selectedUsers.length > 0) {
-      const amount = totalAmount / selectedUsers.length;
-      const shares = selectedUsers.map(userId => ({
+    const createdBy = form.getFieldValue('createdBy');
+    
+    if (totalAmount <= 0) {
+      message.warning('请先输入总金额');
+      return;
+    }
+    
+    if (selectedUsers.length === 0) {
+      message.warning('请先选择参与用户');
+      return;
+    }
+    
+    // 计算每人应付金额（精确到两位小数）
+    const amountPerPerson = parseFloat((totalAmount / selectedUsers.length).toFixed(2));
+    
+    // 计算向下取整后的总金额
+    let baseAllocatedAmount = parseFloat((amountPerPerson * selectedUsers.length).toFixed(2));
+    
+    // 计算剩余的差额
+    let difference = parseFloat((totalAmount - baseAllocatedAmount).toFixed(2));
+    
+    // 需要增加的小数部分
+    let adjustment = 0;
+    if (difference > 0) {
+      // 将difference转换为分，四舍五入
+      adjustment = Math.round(difference * 100);
+    }
+    
+    // 创建分账
+    const shares = selectedUsers.map((userId, index) => {
+      let amount = amountPerPerson;
+      
+      // 前adjustment个用户多付0.01元
+      if (index < adjustment) {
+        amount = parseFloat((amount + 0.01).toFixed(2));
+      }
+      
+      return {
         userId,
         amount,
-        paid: false
-      }));
-      form.setFieldsValue({ shares });
-    } else {
-      message.warning('请先输入总金额并选择用户');
-    }
+        paid: userId === createdBy // 如果是创建者，自动标记为已付款
+      };
+    });
+    
+    // 更新表单
+    form.setFieldsValue({ shares });
   };
 
   // 提交表单

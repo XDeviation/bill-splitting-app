@@ -104,18 +104,27 @@ export default function BillsPage() {
     const result = mergeBillsByCurrency();
     const currencies = Object.keys(result);
     
-    if (currencies.length === 0) {
+    if (currencies.length === 0 || currencies.every(currency => !result[currency as CurrencyType]?.length)) {
       messageApi.warning('没有可合并的账单，需要至少两个相同币种的待付款账单');
       return;
     }
     
+    // 计算合并的账单数量
+    let totalBillsMerged = 0;
+    currencies.forEach(currency => {
+      const currencyBills = result[currency as CurrencyType] || [];
+      totalBillsMerged += currencyBills.length;
+    });
+    
     // 展示合并结果
-    const successMsg = currencies.map(currency => 
-      `已合并 ${currency} 账单，生成新账单: ${result[currency as CurrencyType]?.title}`
-    ).join('; ');
+    const successMsg = `成功创建 ${totalBillsMerged} 个合并账单`;
     
     messageApi.success(successMsg);
-    loadData();
+    
+    // 重新加载数据以显示合并后的账单
+    setTimeout(() => {
+      loadData();
+    }, 500);
   };
 
   // 表格行选择配置
@@ -190,8 +199,8 @@ export default function BillsPage() {
       render: (status: string) => {
         const statusConfig = {
           unpaid: { color: 'warning', text: '未出账', icon: <ExclamationCircleOutlined /> },
-          pending: { color: 'processing', text: '出账', icon: <ClockCircleOutlined /> },
-          completed: { color: 'success', text: '完成', icon: <CheckCircleOutlined /> },
+          pending: { color: 'processing', text: '待付款', icon: <ClockCircleOutlined /> },
+          completed: { color: 'success', text: '已完成', icon: <CheckCircleOutlined /> },
           merged: { color: 'default', text: '已合账', icon: <NodeIndexOutlined /> },
         };
         const statusInfo = statusConfig[status as keyof typeof statusConfig];
