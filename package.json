@@ -12,6 +12,9 @@
     "@ant-design/charts": "^2.2.7",
     "@heroicons/react": "^2.2.0",
     "antd": "^5.24.7",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "mongoose": "^8.13.2",
     "next": "15.3.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

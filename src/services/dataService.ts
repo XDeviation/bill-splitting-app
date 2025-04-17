@@ -1,68 +1,83 @@
-import { User, Bill, BillStatus, Settlement, CurrencyType, BillShare } from '../types';
+import { User, Bill, BillStatus, Settlement, CurrencyType } from "../types";
+import { userApi, billApi } from "./apiService";
 
-// 使用localStorage存储数据
-const STORAGE_KEYS = {
-  USERS: 'bill-splitting-users',
-  BILLS: 'bill-splitting-bills',
-};
+// 用户数据缓存
+let usersCache: User[] | null = null;
+let usersCacheTimestamp: number = 0;
+const CACHE_EXPIRY_MS = 60000; // 缓存有效期1分钟
 
-// 初始用户数据
-const DEFAULT_USERS: User[] = [
-  { id: '1', name: '张三' },
-  { id: '2', name: '李四' },
-  { id: '3', name: '王五' },
-];
+// 账单数据缓存
+let billsCache: Bill[] | null = null;
+let billsCacheTimestamp: number = 0;
 
 // 获取用户
-export const getUsers = (): User[] => {
-  if (typeof window === 'undefined') return DEFAULT_USERS;
-  
-  const stored = localStorage.getItem(STORAGE_KEYS.USERS);
-  if (!stored) {
-    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(DEFAULT_USERS));
-    return DEFAULT_USERS;
+export const getUsers = async (): Promise<User[]> => {
+  try {
+    const now = Date.now();
+
+    // 使用缓存数据，如果缓存有效且未过期
+    if (usersCache && now - usersCacheTimestamp < CACHE_EXPIRY_MS) {
+      return usersCache;
+    }
+
+    // 获取新数据并更新缓存
+    const users = await userApi.getUsers();
+    usersCache = users;
+    usersCacheTimestamp = now;
+    return users;
+  } catch (error) {
+    console.error("获取用户失败:", error);
+    // 如果请求失败但有缓存，返回缓存数据
+    if (usersCache) {
+      return usersCache;
+    }
+    return [];
   }
-  
-  return JSON.parse(stored);
 };
 
 // 添加用户
-export const addUser = (name: string): User => {
-  const users = getUsers();
-  const newUser = {
-    id: Date.now().toString(),
-    name,
-  };
-  
-  users.push(newUser);
-  localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
-  return newUser;
+export const addUser = async (name: string): Promise<User | null> => {
+  try {
+    const newUser = await userApi.addUser(name);
+    // 更新缓存
+    if (newUser) {
+      usersCache = null; // 强制下次重新获取
+    }
+    return newUser;
+  } catch (error) {
+    console.error("添加用户失败:", error);
+    return null;
+  }
 };
 
-// 更新用户
-export const updateUser = (user: User): User => {
-  const users = getUsers();
-  const index = users.findIndex(u => u.id === user.id);
-  
-  if (index >= 0) {
-    users[index] = user;
-    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
-  }
-  
+// 更新用户 (当前API未实现此功能，保留接口兼容性)
+export const updateUser = async (user: User): Promise<User> => {
   return user;
 };
 
 // 获取账单
-export const getBills = (): Bill[] => {
-  if (typeof window === 'undefined') return [];
-  
-  const stored = localStorage.getItem(STORAGE_KEYS.BILLS);
-  if (!stored) return [];
-  
-  return JSON.parse(stored, (key, value) => {
-    if (key === 'createdAt' && typeof value === 'string') return new Date(value).getTime();
-    return value;
-  });
+export const getBills = async (): Promise<Bill[]> => {
+  try {
+    const now = Date.now();
+
+    // 使用缓存数据，如果缓存有效且未过期
+    if (billsCache && now - billsCacheTimestamp < CACHE_EXPIRY_MS) {
+      return billsCache;
+    }
+
+    // 获取新数据并更新缓存
+    const bills = await billApi.getBills();
+    billsCache = bills;
+    billsCacheTimestamp = now;
+    return bills;
+  } catch (error) {
+    console.error("获取账单失败:", error);
+    // 如果请求失败但有缓存，返回缓存数据
+    if (billsCache) {
+      return billsCache;
+    }
+    return [];
+  }
 };
 
 // 将元转换为分（整数）
@@ -76,591 +91,512 @@ export const fenToYuan = (fen: number): string => {
   return (fen / 100).toFixed(2);
 };
 
+// 清除账单缓存
+const clearBillsCache = () => {
+  billsCache = null;
+  billsCacheTimestamp = 0;
+};
+
 // 添加账单
-export const addBill = (bill: Omit<Bill, 'id' | 'createdAt'>): Bill => {
-  const bills = getBills();
-  let shares = [...bill.shares];
-  
-  // 将totalAmount从元转换为分（整数）
-  const totalAmountInFen = yuanToFen(bill.totalAmount);
-  
-  // 如果需要均分账单
-  if (shares.every(share => share.amount === 0)) {
-    // 计算需要均分的总金额（分）
-    const totalAmount = totalAmountInFen;
-    // 参与分账的总人数
-    const totalParticipants = shares.length;
-    
-    if (totalParticipants > 0) {
-      // 找出创建者
-      const creatorIndex = shares.findIndex(share => share.userId === bill.createdBy);
-      
-      if (totalParticipants > 1 && creatorIndex !== -1) {
-        // 计算每人应付金额（整数分）
-        let amountPerPersonInFen = Math.floor(totalAmount / totalParticipants);
-        if (totalAmount % totalParticipants !== 0) {
-          // 如果不能整除，则将余数分配给创建者
-          amountPerPersonInFen += 1;
+export const addBill = async (
+  bill: Omit<Bill, "id" | "createdAt">
+): Promise<Bill | null> => {
+  try {
+    let shares = [...bill.shares];
+
+    // 如果需要均分账单
+    if (shares.every((share) => share.amount === 0)) {
+      // 计算需要均分的总金额（分）
+      const totalAmount = bill.totalAmount;
+      // 参与分账的总人数
+      const totalParticipants = shares.length;
+
+      if (totalParticipants > 0) {
+        // 找出创建者
+        const creatorIndex = shares.findIndex(
+          (share) => share.userId === bill.createdBy
+        );
+
+        if (totalParticipants > 1 && creatorIndex !== -1) {
+          // 计算每人应付金额（整数分）
+          const amountPerPerson = Math.floor(totalAmount / totalParticipants);
+
+          // 非创建者的总金额
+          let totalNonCreatorAmount = 0;
+
+          // 为非创建者分配金额
+          shares = shares.map((share, index) => {
+            if (index !== creatorIndex) {
+              totalNonCreatorAmount += amountPerPerson;
+              return { ...share, amount: amountPerPerson };
+            }
+            return share;
+          });
+
+          // 创建者承担余额（总金额减去其他人的份额）
+          const creatorAmount = totalAmount - totalNonCreatorAmount;
+          shares[creatorIndex] = {
+            ...shares[creatorIndex],
+            amount: creatorAmount,
+          };
+        } else {
+          // 如果只有创建者一个人，那么创建者支付全部金额
+          shares = shares.map((share) => ({
+            ...share,
+            amount: share.userId === bill.createdBy ? totalAmount : 0,
+          }));
         }
-        
-        // 非创建者的总金额
-        let totalNonCreatorAmount = 0;
-        
-        // 为非创建者分配金额
-        shares = shares.map((share, index) => {
-          if (index !== creatorIndex) {
-            totalNonCreatorAmount += amountPerPersonInFen;
-            return { ...share, amount: amountPerPersonInFen };
-          }
-          return share;
-        });
-        
-        // 创建者承担余额（总金额减去其他人的份额）
-        const creatorAmount = totalAmount - totalNonCreatorAmount;
-        shares[creatorIndex] = { ...shares[creatorIndex], amount: creatorAmount };
-      } else {
-        // 如果只有创建者一个人，那么创建者支付全部金额
-        shares = shares.map(share => ({ 
-          ...share, 
-          amount: share.userId === bill.createdBy ? totalAmount : 0 
-        }));
-      }
-      
-      // 检查总和是否等于账单总额
-      const totalShares = shares.reduce((sum, share) => sum + share.amount, 0);
-      if (totalShares !== totalAmount) {
-        console.warn(`分账总额(${totalShares})与账单总额(${totalAmount})不匹配，差额: ${totalShares - totalAmount}`);
       }
     }
-  } else {
-    // 如果已经设置了金额（手动输入），则将金额从元转为分
-    shares = shares.map(share => ({
-      ...share,
-      amount: yuanToFen(share.amount)
-    }));
+
+    // 确保创建者的分账标记为已支付
+    const sharesWithCreatorPaid = shares.map((share) => {
+      if (share.userId === bill.createdBy) {
+        return { ...share, paid: true };
+      }
+      return share;
+    });
+
+    const billToAdd = {
+      ...bill,
+      shares: sharesWithCreatorPaid,
+    };
+
+    const result = await billApi.addBill(billToAdd);
+
+    // 清除缓存，确保下次获取最新数据
+    clearBillsCache();
+
+    return result;
+  } catch (error) {
+    console.error("添加账单失败:", error);
+    return null;
   }
-  
-  // 确保创建者的分账标记为已支付
-  const sharesWithCreatorPaid = shares.map(share => {
-    if (share.userId === bill.createdBy) {
-      return { ...share, paid: true };
-    }
-    return share;
-  });
-  
-  // 生成唯一ID，使用时间戳 + 随机数
-  const uniqueId = `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-  
-  const newBill: Bill = {
-    ...bill,
-    id: uniqueId,
-    createdAt: Date.now(),
-    status: bill.status || BillStatus.UNPAID, // 默认为未出账状态
-    currency: bill.currency || CurrencyType.CNY, // 默认使用人民币
-    shares: sharesWithCreatorPaid,
-    totalAmount: totalAmountInFen // 使用转换后的整数金额
-  };
-  
-  bills.push(newBill);
-  localStorage.setItem(STORAGE_KEYS.BILLS, JSON.stringify(bills));
-  return newBill;
 };
 
 // 更新账单
-export const updateBill = (bill: Bill): Bill => {
-  const bills = getBills();
-  const index = bills.findIndex(b => b.id === bill.id);
-  
-  if (index >= 0) {
-    bills[index] = bill;
-    localStorage.setItem(STORAGE_KEYS.BILLS, JSON.stringify(bills));
+export const updateBill = async (bill: Bill): Promise<Bill | null> => {
+  try {
+    const result = await billApi.updateBill(bill.id, bill);
+
+    // 清除缓存，确保下次获取最新数据
+    clearBillsCache();
+
+    return result;
+  } catch (error) {
+    console.error("更新账单失败:", error);
+    return null;
   }
-  
-  return bill;
 };
 
 // 计算结算金额
-export const calculateSettlements = (): Settlement[] => {
-  const bills = getBills();
-  const users = getUsers();
-  
+export const calculateSettlements = async (): Promise<Settlement[]> => {
+  const bills = await getBills();
+  const users = await getUsers();
+
   // 按货币类型分组
   const settlementsByCurrency: Record<CurrencyType, Settlement[]> = {
     [CurrencyType.CNY]: [],
     [CurrencyType.JPY]: [],
   };
-  
+
   // 分别计算不同货币类型的结算
-  Object.values(CurrencyType).forEach(currency => {
+  Object.values(CurrencyType).forEach((currency) => {
     // 计算每个用户的净欠款（+表示需要支付给他人，-表示需要从他人收取）
     const balances: Record<string, number> = {};
-    
+
     // 初始化余额
-    users.forEach(user => {
+    users.forEach((user) => {
       balances[user.id] = 0;
     });
-    
-    // 只考虑状态为PENDING的账单和指定货币类型
-    const pendingBills = bills.filter(bill => 
-      bill.status === BillStatus.PENDING && 
-      bill.currency === currency
+
+    // 考虑待付款状态和已完成状态的账单
+    const relevantBills = bills.filter(
+      (bill) =>
+        (bill.status === BillStatus.PENDING ||
+          bill.status === BillStatus.COMPLETED) &&
+        bill.currency === currency
     );
-    
-    // 计算每个用户的余额
-    pendingBills.forEach(bill => {
-      bill.shares.forEach(share => {
-        if (!share.paid) {
-          // 欠款人需要支付（负值）
-          balances[share.userId] -= share.amount;
-          // 收款人需要收取（正值）
-          balances[bill.createdBy] += share.amount;
-        }
+
+    // 计算每个用户的净欠款
+    relevantBills.forEach((bill) => {
+      bill.shares.forEach((share) => {
+        const { userId, amount, paid } = share;
+
+        // 如果已支付，不考虑这部分
+        if (paid) return;
+
+        // 欠款人需要支付
+        balances[userId] += amount;
+
+        // 创建者需要收取
+        balances[bill.createdBy] -= amount;
       });
     });
-    
-    // 计算最终的结算方案
-    const debtors = Object.entries(balances)
-      .filter(([, balance]) => balance < 0)
-      .sort((a, b) => a[1] - b[1]); // 从欠得最多的开始
-    
-    const creditors = Object.entries(balances)
-      .filter(([, balance]) => balance > 0)
-      .sort((a, b) => b[1] - a[1]); // 从收得最多的开始
-    
+
+    // 创建结算列表
+    const settlements: Settlement[] = [];
+
+    // 创建欠款人和收款人列表
+    const debtors: { userId: string; amount: number }[] = [];
+    const creditors: { userId: string; amount: number }[] = [];
+
+    // 分类欠款人和收款人
+    Object.entries(balances).forEach(([userId, amount]) => {
+      if (amount > 0) {
+        debtors.push({ userId, amount });
+      } else if (amount < 0) {
+        creditors.push({ userId, amount: -amount });
+      }
+    });
+
+    // 排序欠款人和收款人（从大到小）
+    debtors.sort((a, b) => b.amount - a.amount);
+    creditors.sort((a, b) => b.amount - a.amount);
+
+    // 创建结算方案
     let debtorIndex = 0;
     let creditorIndex = 0;
-    
+
     while (debtorIndex < debtors.length && creditorIndex < creditors.length) {
-      const [debtorId, debtorBalance] = debtors[debtorIndex];
-      const [creditorId, creditorBalance] = creditors[creditorIndex];
-      
-      const debtAmount = Math.min(Math.abs(debtorBalance), creditorBalance);
-      
-      if (debtAmount > 0) {
-        settlementsByCurrency[currency].push({
-          fromUser: debtorId,
-          toUser: creditorId,
-          amount: debtAmount, // 金额已经是整数分
-          currency: currency,
+      const debtor = debtors[debtorIndex];
+      const creditor = creditors[creditorIndex];
+
+      // 计算本次结算金额
+      const settleAmount = Math.min(debtor.amount, creditor.amount);
+
+      // 如果结算金额大于0，创建结算记录
+      if (settleAmount > 0) {
+        settlements.push({
+          fromUser: debtor.userId,
+          toUser: creditor.userId,
+          amount: settleAmount,
+          currency,
         });
       }
-      
+
       // 更新余额
-      const newDebtorBalance = debtorBalance + debtAmount;
-      const newCreditorBalance = creditorBalance - debtAmount;
-      
-      // 更新数组中的值
-      debtors[debtorIndex] = [debtorId, newDebtorBalance];
-      creditors[creditorIndex] = [creditorId, newCreditorBalance];
-      
-      // 如果债务人已经还清或债权人已经收回，移动到下一个
-      if (Math.abs(newDebtorBalance) < 0.01) debtorIndex++;
-      if (newCreditorBalance < 0.01) creditorIndex++;
+      debtor.amount -= settleAmount;
+      creditor.amount -= settleAmount;
+
+      // 如果欠款人已结清，移到下一个
+      if (debtor.amount <= 0) {
+        debtorIndex++;
+      }
+
+      // 如果收款人已收齐，移到下一个
+      if (creditor.amount <= 0) {
+        creditorIndex++;
+      }
     }
+
+    settlementsByCurrency[currency] = settlements;
   });
-  
-  // 合并所有货币类型的结算结果
+
+  // 合并所有货币类型的结算
   return [
     ...settlementsByCurrency[CurrencyType.CNY],
     ...settlementsByCurrency[CurrencyType.JPY],
   ];
 };
 
-// 批量操作账单
-export const batchUpdateBills = (billIds: string[], action: 'markAsPending' | 'markAsCompleted', filterUserId?: string, filterType?: 'all' | 'toPay' | 'toReceive'): Bill[] => {
-  const bills = getBills();
+// 批量更新账单
+export const batchUpdateBills = async (
+  billIds: string[],
+  action: "markAsPending" | "markAsCompleted",
+  filterUserId?: string,
+  filterType?: "all" | "toPay" | "toReceive"
+): Promise<Bill[]> => {
+  const bills = await getBills();
   const updatedBills: Bill[] = [];
-  
-  billIds.forEach(billId => {
-    const bill = bills.find(b => b.id === billId);
-    if (bill) {
-      // 如果账单已合并，则跳过状态更新
-      if (bill.status === BillStatus.MERGED) {
-        return;
+
+  for (const id of billIds) {
+    const bill = bills.find((b) => b.id === id);
+    if (!bill) continue;
+
+    // 跳过已合账的账单
+    if (bill.status === BillStatus.MERGED) {
+      console.log(`跳过已合账账单: ${bill.id}`);
+      continue;
+    }
+
+    // 检查过滤条件
+    if (filterUserId && filterType) {
+      if (
+        filterType === "toPay" &&
+        !bill.shares.some((s) => s.userId === filterUserId && !s.paid)
+      ) {
+        continue;
       }
-      
-      // 如果是标记为待付款，则直接更新状态
-      if (action === 'markAsPending') {
-        bill.status = BillStatus.PENDING;
-        updatedBills.push(bill);
-      } 
-      // 如果是标记为已完成
-      else if (action === 'markAsCompleted') {
-        // 用户筛选了待付款的情况，只将该用户的分账标记为已支付
-        if (filterUserId && filterType === 'toPay') {
-          // 找到该用户的分账并标记为已支付
-          const userShare = bill.shares.find(s => s.userId === filterUserId && !s.paid);
-          if (userShare) {
-            userShare.paid = true;
-            
-            // 检查该账单是否所有分账都已支付
-            const allPaid = bill.shares.every(s => s.paid);
-            if (allPaid) {
-              bill.status = BillStatus.COMPLETED;
-            }
-            
-            updatedBills.push(bill);
-          }
-        }
-        // 用户筛选了待收款的情况，将所有分账标记为已支付
-        else if (filterUserId && filterType === 'toReceive') {
-          // 将所有分账标记为已支付
-          bill.shares.forEach(share => {
-            share.paid = true;
-          });
-          bill.status = BillStatus.COMPLETED;
-          updatedBills.push(bill);
-        }
-        // 没有筛选，直接标记为已完成
-        else {
-          bill.status = BillStatus.COMPLETED;
-          updatedBills.push(bill);
-        }
+      if (filterType === "toReceive" && bill.createdBy !== filterUserId) {
+        continue;
       }
     }
-  });
-  
-  localStorage.setItem(STORAGE_KEYS.BILLS, JSON.stringify(bills));
+
+    try {
+      const newStatus =
+        action === "markAsPending" ? BillStatus.PENDING : BillStatus.COMPLETED;
+      const updatedBill = await billApi.updateBill(id, { status: newStatus });
+      updatedBills.push(updatedBill);
+    } catch (error) {
+      console.error(`更新账单 ${id} 失败:`, error);
+    }
+  }
+
+  // 清除缓存，确保下次获取最新数据
+  clearBillsCache();
+
   return updatedBills;
 };
 
-// 获取与特定用户相关的账单
-export const getBillsByUser = (userId: string, type: 'all' | 'toPay' | 'toReceive'): Bill[] => {
-  const bills = getBills();
-  
-  switch (type) {
-    case 'all':
-      // 所有与该用户相关的账单
-      return bills.filter(bill => 
-        bill.createdBy === userId || 
-        bill.shares.some(share => share.userId === userId)
+// 按用户获取账单
+export const getBillsByUser = async (
+  userId: string,
+  type: "all" | "toPay" | "toReceive"
+): Promise<Bill[]> => {
+  const bills = await getBills();
+
+  return bills.filter((bill) => {
+    if (type === "all") {
+      return (
+        bill.shares.some((s) => s.userId === userId) ||
+        bill.createdBy === userId
       );
-    
-    case 'toPay':
-      // 该用户需要支付的账单
-      return bills.filter(bill => 
-        bill.status === BillStatus.PENDING && 
-        bill.createdBy !== userId && 
-        bill.shares.some(share => share.userId === userId && !share.paid)
+    }
+
+    if (type === "toPay") {
+      return bill.shares.some(
+        (s) => s.userId === userId && !s.paid && bill.createdBy !== userId
       );
-    
-    case 'toReceive':
-      // 该用户需要收款的账单
-      return bills.filter(bill => 
-        bill.status === BillStatus.PENDING && 
-        bill.createdBy === userId && 
-        bill.shares.some(share => !share.paid)
-      );
-    
-    default:
-      return [];
-  }
-};
-
-// 标记账单为已完成
-export const markBillAsCompleted = (billId: string): Bill | null => {
-  const bills = getBills();
-  const bill = bills.find(b => b.id === billId);
-  
-  if (!bill) return null;
-  
-  bill.status = BillStatus.COMPLETED;
-  localStorage.setItem(STORAGE_KEYS.BILLS, JSON.stringify(bills));
-  return bill;
-};
-
-// 标记分账已支付
-export const markShareAsPaid = (billId: string, userId: string): Bill | null => {
-  const bills = getBills();
-  const bill = bills.find(b => b.id === billId);
-  
-  if (!bill) return null;
-  
-  const share = bill.shares.find(s => s.userId === userId);
-  if (share) {
-    share.paid = true;
-    
-    // 检查是否所有分账都已支付
-    const allPaid = bill.shares.every(s => s.paid);
-    if (allPaid) {
-      bill.status = BillStatus.COMPLETED;
     }
-    
-    localStorage.setItem(STORAGE_KEYS.BILLS, JSON.stringify(bills));
-  }
-  
-  return bill;
-};
 
-// 标记账单为待付款
-export const markBillAsPending = (billId: string): Bill | null => {
-  const bills = getBills();
-  const bill = bills.find(b => b.id === billId);
-  
-  if (!bill) return null;
-  
-  bill.status = BillStatus.PENDING;
-  localStorage.setItem(STORAGE_KEYS.BILLS, JSON.stringify(bills));
-  return bill;
-};
-
-// 删除账单
-export const deleteBill = (billId: string): boolean => {
-  const bills = getBills();
-  const initialLength = bills.length;
-  const filteredBills = bills.filter(bill => bill.id !== billId);
-  
-  if (filteredBills.length === initialLength) {
-    return false; // 没有找到要删除的账单
-  }
-  
-  localStorage.setItem(STORAGE_KEYS.BILLS, JSON.stringify(filteredBills));
-  return true;
-};
-
-// 在getUserName函数中添加对空用户ID的处理
-export const getUserName = (userId: string): string => {
-  if (!userId) return '系统';
-  
-  const user = getUsers().find(u => u.id === userId);
-  return user ? user.name : '未知用户';
-};
-
-// 一键合账功能
-export const mergeBillsByCurrency = (): Promise<{ [key in CurrencyType]?: Bill[] }> => {
-  return new Promise((resolve) => {
-    const bills = getBills();
-    const pendingBills = bills.filter(bill => bill.status === BillStatus.PENDING);
-    const result: { [key in CurrencyType]?: Bill[] } = {
-      [CurrencyType.CNY]: [],
-      [CurrencyType.JPY]: [],
-    };
-    
-    // 按币种分组
-    const billsByCurrency: Record<CurrencyType, Bill[]> = {
-      [CurrencyType.CNY]: [],
-      [CurrencyType.JPY]: [],
-    };
-    
-    pendingBills.forEach(bill => {
-      billsByCurrency[bill.currency].push(bill);
-    });
-    
-    let pendingOperations = 0;
-    let allDone = false;
-    
-    // 检查是否所有操作都已完成
-    function checkIfDone() {
-      if (pendingOperations === 0 && !allDone) {
-        allDone = true;
-        resolve(result);
-      }
+    if (type === "toReceive") {
+      return bill.createdBy === userId && bill.shares.some((s) => !s.paid);
     }
-    
-    // 处理每一种货币类型
-    Object.entries(billsByCurrency).forEach(([currency, currencyBills]) => {
-      if (currencyBills.length <= 1) return; // 至少要有两个账单才需要合并
-      
-      const currencyType = currency as CurrencyType;
-      const users = getUsers();
-      
-      // 计算用户净收支，正值表示需要收钱，负值表示需要付钱
-      const userBalances: Record<string, number> = {};
-      
-      // 初始化余额
-      users.forEach(user => {
-        userBalances[user.id] = 0;
-      });
-      
-      // 计算每个用户在所有待付款账单中的净收支
-      currencyBills.forEach(bill => {
-        // 收款人（创建者）收取的金额
-        let creatorReceives = 0;
-        
-        bill.shares.forEach(share => {
-          if (!share.paid) { // 只考虑未支付的部分
-            // 付款人减去应付金额（已经是整数分）
-            userBalances[share.userId] -= share.amount;
-            // 统计创建者应收取的金额
-            creatorReceives += share.amount;
-          }
-        });
-        
-        // 创建者增加应收金额
-        userBalances[bill.createdBy] += creatorReceives;
-      });
-      
-      // 获取所有净收款方（余额为正）的用户
-      const creditors = Object.entries(userBalances)
-        .filter(([, balance]) => balance > 0)
-        .sort((a, b) => b[1] - a[1]); // 按金额降序
-      
-      // 获取所有需要付款的用户（余额为负）
-      const debtors = Object.entries(userBalances)
-        .filter(([, balance]) => balance < 0)
-        .sort((a, b) => a[1] - b[1]); // 按欠款多少排序
-      
-      if (creditors.length === 0 || debtors.length === 0) return; // 如果没有净收款方或付款方，则不需要合并
-      
-      // 收集要标记为已合账的原始账单ID
-      const originalBillIds = currencyBills.map(bill => bill.id);
-      
-      // 为每个收款人创建一个合并账单
-      pendingOperations += creditors.length + 1; // 每个收款人的账单 + 最后的状态更新
-      
-      creditors.forEach((creditor, creditorIndex) => {
-        const [creditorId, creditorBalance] = creditor;
-        
-        // 深拷贝付款人列表，以便在处理过程中修改
-        const remainingDebtors = [...debtors];
-        let totalCollectedForCreditor = 0;
-        const creditorShares: BillShare[] = [];
-        
-        // 为该收款人分配欠款人
-        while (remainingDebtors.length > 0 && totalCollectedForCreditor < creditorBalance) {
-          const [debtorId, debtorBalance] = remainingDebtors[0];
-          const absDebtorBalance = Math.abs(debtorBalance);
-          
-          // 计算这个欠款人应该付给当前收款人的金额（整数分）
-          const amountToAllocate = Math.min(
-            absDebtorBalance, 
-            creditorBalance - totalCollectedForCreditor
-          );
-          
-          if (amountToAllocate > 0) {
-            // 添加到该收款人的分账中（金额已经是整数分）
-            creditorShares.push({
-              userId: debtorId,
-              amount: amountToAllocate, // 保持整数分，不需要转换
-              paid: false
-            });
-            
-            // 更新已收集的总金额
-            totalCollectedForCreditor += amountToAllocate;
-            
-            // 更新欠款人的余额
-            if (absDebtorBalance - amountToAllocate === 0) {
-              // 如果欠款人的债务已经完全分配，则从列表中移除
-              remainingDebtors.shift();
-            } else {
-              // 否则更新欠款人的余额
-              remainingDebtors[0] = [
-                debtorId, 
-                debtorBalance + amountToAllocate
-              ];
-            }
-          } else {
-            // 如果无法分配更多金额，跳出循环
-            break;
-          }
-        }
-        
-        // 如果没有分账，则跳过创建账单
-        if (creditorShares.length === 0) {
-          pendingOperations--;
-          checkIfDone();
-          return;
-        }
-        
-        // 计算总金额（整数分）
-        const totalAmount = creditorShares.reduce((sum, share) => sum + share.amount, 0);
-        
-        // 如果总金额太小，则不创建账单
-        if (totalAmount < 1) { // 1分（整数）
-          pendingOperations--;
-          checkIfDone();
-          return;
-        }
-        
-        // 创建合并账单的标题
-        const mergedTitle = currencyBills
-          .map(bill => bill.title.substring(0, 10)) // 截取每个标题的前10个字符
-          .join(' + ');
-        
-        // 创建最终标题，添加合并标记和收款人姓名
-        const creditorName = getUserName(creditorId);
-        const finalTitle = `【合并账单-${creditorName}】${mergedTitle}${currencyBills.length > 2 ? '等' : ''}`;
-        
-        // 在这里将整数分金额转回元单位，以便在addBill中正确处理
-        // 注意：totalAmount是整数分，需要除以100变回元，但addBill会再乘100
-        const mergedBill: Omit<Bill, 'id' | 'createdAt'> = {
-          title: finalTitle,
-          description: `自动合并的${currencyType}账单，收款人: ${creditorName}，包含${currencyBills.length}个原始账单`,
-          totalAmount: totalAmount / 100, // 将整数分转回元
-          createdBy: creditorId,
-          status: BillStatus.PENDING,
-          shares: creditorShares.map(share => ({
-            ...share,
-            amount: share.amount / 100 // 将整数分转回元
-          })),
-          currency: currencyType,
-        };
-        
-        try {
-          // 确保在多次快速操作时ID不会冲突，添加小延迟
-          setTimeout(() => {
-            // 添加合并账单
-            const newBill = addBill(mergedBill);
-            
-            // 将新创建的账单添加到结果中
-            if (!result[currencyType]) {
-              result[currencyType] = [];
-            }
-            result[currencyType]?.push(newBill);
-            
-            // 减少待完成操作计数
-            pendingOperations--;
-            checkIfDone();
-          }, 10 * (creditorIndex + 1)); // 使用索引而不是indexOf来错开时间
-        } catch (error) {
-          console.error(`合并账单创建失败(收款人: ${creditorName}):`, error);
-          pendingOperations--;
-          checkIfDone();
-        }
-      });
-      
-      // 在所有收款人的账单都创建完毕后，将原始账单标记为已合账
-      // 添加更长的延迟，确保所有合并账单都已创建
-      setTimeout(() => {
-        // 获取最新的账单列表
-        const allBills = getBills();
-        
-        // 找到原始账单并标记为已合账
-        originalBillIds.forEach(billId => {
-          const billToUpdate = allBills.find(b => b.id === billId);
-          if (billToUpdate) {
-            billToUpdate.status = BillStatus.MERGED;
-          }
-        });
-        
-        // 更新原始账单状态
-        localStorage.setItem(STORAGE_KEYS.BILLS, JSON.stringify(allBills));
-        
-        pendingOperations--;
-        checkIfDone();
-      }, 100); // 使用更长的延迟
-    });
-    
-    // 如果没有任何操作，直接解析
-    if (pendingOperations === 0) {
-      resolve(result);
-      return;
-    }
+
+    return false;
   });
 };
 
-// 批量删除账单
-export const batchDeleteBills = (billIds: string[]): boolean => {
-  if (!billIds || billIds.length === 0) return false;
-  
-  const bills = getBills();
-  const initialLength = bills.length;
-  const filteredBills = bills.filter(bill => !billIds.includes(bill.id));
-  
-  if (filteredBills.length === initialLength) {
-    return false; // 没有找到要删除的账单
+// 将账单标记为已完成
+export const markBillAsCompleted = async (
+  billId: string
+): Promise<Bill | null> => {
+  try {
+    const result = await billApi.updateBill(billId, {
+      status: BillStatus.COMPLETED,
+    });
+
+    // 清除缓存，确保下次获取最新数据
+    clearBillsCache();
+
+    return result;
+  } catch (error) {
+    console.error("更新账单状态失败:", error);
+    return null;
   }
-  
-  localStorage.setItem(STORAGE_KEYS.BILLS, JSON.stringify(filteredBills));
-  return true;
+};
+
+// 将分账标记为已支付
+export const markShareAsPaid = async (
+  billId: string,
+  userId: string
+): Promise<Bill | null> => {
+  try {
+    const bill = (await getBills()).find((b) => b.id === billId);
+    if (!bill) return null;
+
+    const shares = bill.shares.map((share) => {
+      if (share.userId === userId) {
+        return { ...share, paid: true };
+      }
+      return share;
+    });
+
+    const result = await billApi.updateBill(billId, { shares });
+
+    // 清除缓存，确保下次获取最新数据
+    clearBillsCache();
+
+    return result;
+  } catch (error) {
+    console.error("更新分账状态失败:", error);
+    return null;
+  }
+};
+
+// 将账单标记为待付款
+export const markBillAsPending = async (
+  billId: string
+): Promise<Bill | null> => {
+  try {
+    const result = await billApi.updateBill(billId, {
+      status: BillStatus.PENDING,
+    });
+
+    // 清除缓存，确保下次获取最新数据
+    clearBillsCache();
+
+    return result;
+  } catch (error) {
+    console.error("更新账单状态失败:", error);
+    return null;
+  }
+};
+
+// 删除账单
+export const deleteBill = async (billId: string): Promise<boolean> => {
+  try {
+    const result = await billApi.deleteBill(billId);
+
+    // 清除缓存，确保下次获取最新数据
+    clearBillsCache();
+
+    return result;
+  } catch (error) {
+    console.error("删除账单失败:", error);
+    return false;
+  }
+};
+
+// 获取用户名
+export const getUserName = async (userId: string): Promise<string> => {
+  const users = await getUsers();
+  const user = users.find((u) => u.id === userId);
+  return user ? user.name : "未知用户";
+};
+
+// 合并账单按货币类型
+export const mergeBillsByCurrency = async (): Promise<{
+  [key in CurrencyType]?: Bill[];
+}> => {
+  // 获取所有账单和用户
+  const bills = await getBills();
+  const users = await getUsers();
+  const result: { [key in CurrencyType]?: Bill[] } = {};
+
+  // 按货币类型分组
+  for (const currency of Object.values(CurrencyType)) {
+    // 只考虑待付款状态的账单
+    const pendingBills = bills.filter(
+      (bill) =>
+        bill.status.toString() === BillStatus.PENDING.toString() &&
+        bill.currency === currency
+    );
+
+    if (pendingBills.length < 2) {
+      continue;
+    }
+
+    // 确保至少有两个可合并的账单
+    try {
+      // 按创建者（收款人）分组账单
+      const billsByCreator: Record<string, Bill[]> = {};
+      pendingBills.forEach((bill) => {
+        if (!billsByCreator[bill.createdBy]) {
+          billsByCreator[bill.createdBy] = [];
+        }
+        billsByCreator[bill.createdBy].push(bill);
+      });
+
+      // 为每个收款人创建一个合并账单
+      const newBillsForCurrency: Bill[] = [];
+
+      for (const [creatorId, creatorBills] of Object.entries(billsByCreator)) {
+        // 1. 按用户组织需要支付的金额
+        const mergedShares: Record<string, { amount: number; paid: boolean }> =
+          {};
+
+        // 收集所有账单中的分账信息
+        creatorBills.forEach((bill) => {
+          bill.shares.forEach((share) => {
+            // 如果尚未支付，则计入合并账单
+            if (!share.paid) {
+              if (!mergedShares[share.userId]) {
+                mergedShares[share.userId] = { amount: 0, paid: false };
+              }
+              mergedShares[share.userId].amount += share.amount;
+            }
+          });
+        });
+
+        // 2. 创建合并账单
+        const totalAmount = Object.values(mergedShares).reduce(
+          (sum, share) => sum + share.amount,
+          0
+        );
+
+        // 如果没有需要支付的金额，则跳过
+        if (totalAmount <= 0) {
+          continue;
+        }
+
+        // 获取创建者名称用于账单标题
+        const creatorName =
+          users.find((u) => u.id === creatorId)?.name || "未知用户";
+
+        // 创建合并账单对象
+        const mergedBill = {
+          title: `合并账单 - ${creatorName} (${currency})`,
+          description: `系统自动合并了 ${creatorBills.length} 个${creatorName}的${currency}账单`,
+          totalAmount: totalAmount / 100, // 除以100转换回元，因为API会再乘以100
+          createdBy: creatorId, // 使用原始创建者ID
+          status: BillStatus.PENDING, // 新生成的合并账单应为待付款状态
+          shares: Object.entries(mergedShares).map(([userId, data]) => ({
+            userId,
+            amount: data.amount / 100, // 除以100转换回元，因为API会再乘以100
+            paid: userId === creatorId ? true : data.paid, // 创建者自动标记为已支付
+          })),
+          currency: currency,
+        };
+
+        // 3. 添加合并账单到数据库
+        const newBill = await billApi.addBill(mergedBill);
+
+        // 将新创建的合并账单添加到结果中
+        if (newBill) {
+          newBillsForCurrency.push(newBill);
+
+          // 4. 将原始账单标记为已合并状态
+          for (const bill of creatorBills) {
+            await billApi.updateBill(bill.id, { status: BillStatus.MERGED });
+          }
+        }
+      }
+
+      // 如果有成功创建的合并账单，添加到结果中
+      if (newBillsForCurrency.length > 0) {
+        result[currency] = newBillsForCurrency;
+      }
+
+      // 清除缓存，确保下次获取最新数据
+      clearBillsCache();
+    } catch (error) {
+      console.error(`合并${currency}账单失败:`, error);
+    }
+  }
+
+  return result;
+};
+
+// 批量删除账单
+export const batchDeleteBills = async (billIds: string[]): Promise<boolean> => {
+  try {
+    let success = true;
+
+    for (const id of billIds) {
+      const deleted = await billApi.deleteBill(id);
+      if (!deleted) {
+        success = false;
+      }
+    }
+
+    // 清除缓存，确保下次获取最新数据
+    clearBillsCache();
+
+    return success;
+  } catch (error) {
+    console.error("批量删除账单失败:", error);
+    return false;
+  }
 };

@@ -1,75 +1,102 @@
-'use client';
+"use client";
 
-import React from 'react';
-import { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import { 
-  Typography, 
-  Card, 
-  Button, 
-  Tag, 
-  Space, 
-  Divider, 
-  List, 
-  Avatar, 
-  Descriptions, 
+import React from "react";
+import { useState, useEffect } from "react";
+import { useParams, useRouter } from "next/navigation";
+import {
+  Typography,
+  Card,
+  Button,
+  Tag,
+  Space,
+  Divider,
+  List,
+  Avatar,
+  Descriptions,
   Popconfirm,
-  App
-} from 'antd';
-import { 
-  UserOutlined, 
-  RollbackOutlined, 
-  CheckCircleOutlined, 
+  App,
+} from "antd";
+import {
+  UserOutlined,
+  RollbackOutlined,
+  CheckCircleOutlined,
   ExclamationCircleOutlined,
-  DeleteOutlined
-} from '@ant-design/icons';
-import { 
-  getBills, 
-  getUsers, 
-  deleteBill, 
-  markBillAsPending, 
+  DeleteOutlined,
+} from "@ant-design/icons";
+import {
+  getBills,
+  getUsers,
+  deleteBill,
+  markBillAsPending,
   markBillAsCompleted,
-  markShareAsPaid, 
+  markShareAsPaid,
   getUserName,
-  fenToYuan
-} from '../../../services/dataService';
-import { Bill, BillStatus, User } from '../../../types';
+  fenToYuan,
+} from "../../../services/dataService";
+import { Bill, BillStatus, User } from "../../../types";
 
 const { Title, Text } = Typography;
 
 export default function BillDetailPage() {
   const params = useParams();
-  const billId = typeof params.id === 'string' ? params.id : Array.isArray(params.id) ? params.id[0] : '';
+  const billId =
+    typeof params.id === "string"
+      ? params.id
+      : Array.isArray(params.id)
+      ? params.id[0]
+      : "";
   const router = useRouter();
   const { message: messageApi } = App.useApp();
-  
+
   const [bill, setBill] = useState<Bill | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
-  
+  const [creatorName, setCreatorName] = useState<string>("加载中...");
+
   // 获取账单数据
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const allBills = getBills();
-      const foundBill = allBills.find(b => b.id === billId);
-      if (foundBill) {
-        setBill(foundBill);
+    async function fetchData() {
+      if (typeof window !== "undefined") {
+        const allBills = await getBills();
+        const foundBill = allBills.find((b) => b.id === billId);
+        if (foundBill) {
+          setBill(foundBill);
+          setCreatorName(await getUserName(foundBill.createdBy));
+        }
+
+        setUsers(await getUsers());
+        setLoading(false);
       }
-      
-      setUsers(getUsers());
-      setLoading(false);
     }
+
+    fetchData();
   }, [billId]);
-  
+
   // 获取状态标签
   const getStatusTag = (status: BillStatus) => {
     const statusConfig = {
-      [BillStatus.UNPAID]: { color: 'warning', text: '未出账', icon: <ExclamationCircleOutlined /> },
-      [BillStatus.PENDING]: { color: 'processing', text: '待付款', icon: <ExclamationCircleOutlined /> },
-      [BillStatus.COMPLETED]: { color: 'success', text: '已完成', icon: <CheckCircleOutlined /> },
-      [BillStatus.MERGED]: { color: 'default', text: '已合账', icon: <CheckCircleOutlined /> },
+      [BillStatus.UNPAID]: {
+        color: "warning",
+        text: "未出账",
+        icon: <ExclamationCircleOutlined />,
+      },
+      [BillStatus.PENDING]: {
+        color: "processing",
+        text: "待付款",
+        icon: <ExclamationCircleOutlined />,
+      },
+      [BillStatus.COMPLETED]: {
+        color: "success",
+        text: "已完成",
+        icon: <CheckCircleOutlined />,
+      },
+      [BillStatus.MERGED]: {
+        color: "default",
+        text: "已合账",
+        icon: <CheckCircleOutlined />,
+      },
     };
-    
+
     const config = statusConfig[status];
     return (
       <Tag color={config.color} icon={config.icon}>
@@ -77,65 +104,81 @@ export default function BillDetailPage() {
       </Tag>
     );
   };
-  
+
   // 删除账单
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (bill) {
-      const success = deleteBill(bill.id);
+      const success = await deleteBill(bill.id);
       if (success) {
-        messageApi.success('账单已删除');
-        router.push('/bills');
+        messageApi.success("账单已删除");
+        router.push("/bills");
       } else {
-        messageApi.error('删除失败');
+        messageApi.error("删除失败");
       }
     }
   };
-  
+
   // 标记为待付款
-  const handleMarkAsPending = () => {
+  const handleMarkAsPending = async () => {
     if (bill) {
-      const updatedBill = markBillAsPending(bill.id);
+      const updatedBill = await markBillAsPending(bill.id);
       if (updatedBill) {
         setBill(updatedBill);
-        messageApi.success('账单已标记为待付款');
+        messageApi.success("账单已标记为待付款");
       }
     }
   };
-  
+
   // 标记为已完成
-  const handleMarkAsCompleted = () => {
+  const handleMarkAsCompleted = async () => {
     if (bill) {
-      const updatedBill = markBillAsCompleted(bill.id);
+      const updatedBill = await markBillAsCompleted(bill.id);
       if (updatedBill) {
         setBill(updatedBill);
-        messageApi.success('账单已标记为已完成');
+        messageApi.success("账单已标记为已完成");
       }
     }
   };
-  
+
   // 标记分账已支付
-  const handleMarkShareAsPaid = (userId: string) => {
+  const handleMarkShareAsPaid = async (userId: string) => {
     if (bill) {
-      const updatedBill = markShareAsPaid(bill.id, userId);
+      const updatedBill = await markShareAsPaid(bill.id, userId);
       if (updatedBill) {
         setBill(updatedBill);
-        messageApi.success(`${getUserName(userId)}的付款已确认`);
+        messageApi.success(`${await getUserName(userId)}的付款已确认`);
       }
     }
   };
-  
+
   // 返回账单列表
   const handleBack = () => {
-    router.push('/bills');
+    router.push("/bills");
   };
-  
+
   if (loading) {
-    return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh' }} />;
+    return (
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          minHeight: "60vh",
+        }}
+      />
+    );
   }
-  
+
   if (!bill) {
     return (
-      <Card style={{ maxWidth: '800px', margin: '20px auto', padding: '20px', textAlign: 'center' }}>
+      <Card
+        style={{
+          maxWidth: "800px",
+          margin: "20px auto",
+          padding: "20px",
+          textAlign: "center",
+        }}
+      >
         <Title level={4}>账单不存在</Title>
         <Button type="primary" icon={<RollbackOutlined />} onClick={handleBack}>
           返回账单列表
@@ -145,19 +188,24 @@ export default function BillDetailPage() {
   }
 
   return (
-    <div style={{ maxWidth: '800px', margin: '20px auto', padding: '0 16px' }}>
+    <div style={{ maxWidth: "800px", margin: "20px auto", padding: "0 16px" }}>
       <Card
         title={
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
             <Space>
-              <Title level={4} style={{ margin: 0 }}>{bill.title}</Title>
+              <Title level={4} style={{ margin: 0 }}>
+                {bill.title}
+              </Title>
               {getStatusTag(bill.status as BillStatus)}
             </Space>
             <Space>
-              <Button 
-                icon={<RollbackOutlined />} 
-                onClick={handleBack}
-              >
+              <Button icon={<RollbackOutlined />} onClick={handleBack}>
                 返回
               </Button>
             </Space>
@@ -173,21 +221,17 @@ export default function BillDetailPage() {
                   okText="确定"
                   cancelText="取消"
                 >
-                  <Button danger icon={<DeleteOutlined />}>删除</Button>
+                  <Button danger icon={<DeleteOutlined />}>
+                    删除
+                  </Button>
                 </Popconfirm>
                 {bill.status === BillStatus.UNPAID && (
-                  <Button 
-                    type="primary" 
-                    onClick={handleMarkAsPending}
-                  >
+                  <Button type="primary" onClick={handleMarkAsPending}>
                     标记为待付款
                   </Button>
                 )}
                 {bill.status === BillStatus.PENDING && (
-                  <Button 
-                    type="primary" 
-                    onClick={handleMarkAsCompleted}
-                  >
+                  <Button type="primary" onClick={handleMarkAsCompleted}>
                     标记为已完成
                   </Button>
                 )}
@@ -201,9 +245,13 @@ export default function BillDetailPage() {
             {`${fenToYuan(bill.totalAmount)} ${bill.currency}`}
           </Descriptions.Item>
           <Descriptions.Item label="创建者">
-            <div style={{ display: 'flex', alignItems: 'center' }}>
-              <Avatar size="small" icon={<UserOutlined />} style={{ marginRight: 8 }} />
-              {getUserName(bill.createdBy)}
+            <div style={{ display: "flex", alignItems: "center" }}>
+              <Avatar
+                size="small"
+                icon={<UserOutlined />}
+                style={{ marginRight: 8 }}
+              />
+              {creatorName}
             </div>
           </Descriptions.Item>
           <Descriptions.Item label="创建时间">
@@ -218,35 +266,37 @@ export default function BillDetailPage() {
             </Descriptions.Item>
           )}
         </Descriptions>
-          
+
         <Divider orientation="left">分账明细</Divider>
-        
+
         <List
           itemLayout="horizontal"
           dataSource={bill.shares}
-          renderItem={share => {
-            const user = users.find(u => u.id === share.userId);
+          renderItem={(share) => {
+            const user = users.find((u) => u.id === share.userId);
             return (
               <List.Item
                 actions={[
                   share.paid ? (
                     <Tag color="success">已支付</Tag>
                   ) : bill.status === BillStatus.PENDING ? (
-                    <Button 
-                      type="link" 
+                    <Button
+                      type="link"
                       onClick={() => handleMarkShareAsPaid(share.userId)}
                     >
                       确认支付
                     </Button>
-                  ) : null
+                  ) : null,
                 ]}
               >
                 <List.Item.Meta
                   avatar={<Avatar icon={<UserOutlined />} />}
-                  title={user ? user.name : '未知用户'}
+                  title={user ? user.name : "未知用户"}
                   description={
                     <Space>
-                      <Text>应付: {`${fenToYuan(share.amount)} ${bill.currency}`}</Text>
+                      <Text>
+                        应付: {`${fenToYuan(share.amount)} ${bill.currency}`}
+                      </Text>
                       {share.paid && <Tag color="success">已支付</Tag>}
                     </Space>
                   }
@@ -258,4 +308,4 @@ export default function BillDetailPage() {
       </Card>
     </div>
   );
-} 
+}
