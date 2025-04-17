@@ -242,7 +242,6 @@ export default function HomePage() {
               tooltip={{
                 customContent: (title: string, items: any[]) => {
                   if (!items || items.length === 0) return '';
-                  console.log(items);
                   
                   return `<div style="padding: 8px;">
                     <div style="margin-bottom: 4px;"><b>${title}</b></div>
