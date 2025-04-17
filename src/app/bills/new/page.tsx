@@ -13,7 +13,11 @@ import {
   Tag, 
   Space, 
   Radio, 
-  App 
+  App,
+  Checkbox,
+  Row,
+  Col,
+  Avatar
 } from 'antd';
 import { 
   FileTextOutlined, 
@@ -30,6 +34,7 @@ export default function NewBill() {
   const [form] = Form.useForm();
   const [users, setUsers] = useState<User[]>([]);
   const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
+  const [createdBy, setCreatedBy] = useState<string | null>(null);
   const { message } = App.useApp();
 
   // 加载用户数据
@@ -40,24 +45,61 @@ export default function NewBill() {
     }
   }, []);
 
-  // 处理用户选择变化
-  const handleUserSelectChange = (selectedUserIds: string[]) => {
-    setSelectedUsers(selectedUserIds);
+  // 处理创建人变更
+  const handleCreatorChange = (userId: string) => {
+    setCreatedBy(userId);
+    form.setFieldValue('createdBy', userId);
     
-    // 更新分账表单项
+    // 不再自动添加创建者到参与用户名单
+    // 根据当前的用户选择自动均分金额（如果已有选择）
+    if (selectedUsers.length > 0) {
+      handleSplitEvenly(selectedUsers, userId);
+    }
+  };
+
+  // 处理用户选择变化
+  const handleUserSelectChange = (userId: string, checked: boolean) => {
+    let newSelectedUsers: string[];
+    
+    if (checked) {
+      // 添加用户
+      newSelectedUsers = [...selectedUsers, userId];
+    } else {
+      // 移除用户（但创建者也可以被移除，与创建者角色无关）
+      newSelectedUsers = selectedUsers.filter(id => id !== userId);
+    }
+    
+    setSelectedUsers(newSelectedUsers);
+    updateShares(newSelectedUsers, createdBy || '');
+    
+    // 自动均分（如果有选中的用户且已设置创建者）
+    if (newSelectedUsers.length > 0 && createdBy) {
+      handleSplitEvenly(newSelectedUsers, createdBy);
+    }
+  };
+  
+  // 更新分账项
+  const updateShares = (userIds: string[], creator: string) => {
     const prevShares = form.getFieldValue('shares') || [];
-    const newShares = selectedUserIds.map(userId => {
+    const newShares = userIds.map(userId => {
       const existingShare = prevShares.find((share: any) => share.userId === userId);
-      return existingShare || { userId, amount: 0, paid: false };
+      return existingShare || { 
+        userId, 
+        amount: 0, 
+        paid: userId === creator // 如果是创建者，自动标记为已付款
+      };
     });
     
     form.setFieldsValue({ shares: newShares });
   };
 
   // 处理均分金额
-  const handleSplitEvenly = () => {
+  const handleSplitEvenly = (userIds = selectedUsers, creator = createdBy) => {
+    // 如果没有指定用户ID列表或创建者，使用当前状态的值
+    userIds = userIds || selectedUsers;
+    creator = creator || form.getFieldValue('createdBy');
+    
     const totalAmount = form.getFieldValue('totalAmount') || 0;
-    const createdBy = form.getFieldValue('createdBy');
     const currency = form.getFieldValue('currency') || CurrencyType.CNY;
     
     if (totalAmount <= 0) {
@@ -65,12 +107,12 @@ export default function NewBill() {
       return;
     }
     
-    if (selectedUsers.length === 0) {
+    if (userIds.length === 0) {
       message.warning('请先选择参与用户');
       return;
     }
     
-    if (!createdBy) {
+    if (!creator) {
       message.warning('请先选择创建人');
       return;
     }
@@ -78,58 +120,33 @@ export default function NewBill() {
     // 先将金额转为整数（分）
     const totalAmountInFen = yuanToFen(totalAmount, currency);
     
-    // 找出创建者索引
-    const creatorIndex = selectedUsers.indexOf(createdBy);
-    
-    if (creatorIndex === -1) {
-      message.warning('创建人必须是参与用户');
-      return;
-    }
+    // 创建者可以不是参与用户，不再检查创建者是否在参与用户列表中
     
     // 计算每人应付金额（整数分）
-    let amountPerPersonInFen = Math.floor(totalAmountInFen / selectedUsers.length);
-    if (totalAmountInFen % selectedUsers.length !== 0) {
-      amountPerPersonInFen += 1;
-    }
+    const amountPerPersonInFen = Math.floor(totalAmountInFen / userIds.length);
     
-    // 非创建者的总金额
-    let totalNonCreatorAmount = 0;
+    // 剩余的余额（用于处理不能整除的情况）
+    let remainingFen = totalAmountInFen - (amountPerPersonInFen * userIds.length);
     
     // 创建分账
-    const shares = selectedUsers.map((userId, index) => {
-      // 如果不是创建者，分配基本金额
-      if (userId !== createdBy) {
-        totalNonCreatorAmount += amountPerPersonInFen;
-        
-        // 将整数分转回显示用的元
-        const displayAmount = parseFloat(fenToYuan(amountPerPersonInFen, currency));
-        
-        return {
-          userId,
-          amount: displayAmount,
-          paid: false
-        };
-      } else {
-        // 先填入0，稍后再更新
-        return {
-          userId,
-          amount: 0,
-          paid: true // 创建者自动标记为已付款
-        };
+    const shares = userIds.map((userId, index) => {
+      // 计算该用户应付的金额
+      let userAmountInFen = amountPerPersonInFen;
+      
+      // 如果有余额，按顺序分配给用户，每人多1分
+      if (remainingFen > 0) {
+        userAmountInFen += 1;
+        remainingFen--;
       }
-    });
-    
-    // 创建者承担余额（总金额减去其他人的份额）
-    const creatorAmountInFen = totalAmountInFen - totalNonCreatorAmount;
-    
-    // 将整数分转回显示用的元
-    const creatorDisplayAmount = parseFloat(fenToYuan(creatorAmountInFen, currency));
-    
-    // 更新创建者的金额
-    shares.forEach(share => {
-      if (share.userId === createdBy) {
-        share.amount = creatorDisplayAmount;
-      }
+      
+      // 将整数分转回显示用的元
+      const displayAmount = parseFloat(fenToYuan(userAmountInFen, currency));
+      
+      return {
+        userId,
+        amount: displayAmount,
+        paid: userId === creator // 如果是创建者，自动标记为已付款
+      };
     });
     
     // 更新表单
@@ -157,7 +174,7 @@ export default function NewBill() {
       description: values.description,
       totalAmount: totalAmount, // 这里传入的是显示金额（元），服务层会转为整数（分）
       createdBy: values.createdBy,
-      status: BillStatus.PENDING,
+      status: BillStatus.UNPAID, // 默认为未出账状态
       shares: values.shares,
       currency: values.currency,
     };
@@ -221,6 +238,12 @@ export default function NewBill() {
                 step={0.01}
                 placeholder="输入金额"
                 style={{ width: '100%' }}
+                onChange={() => {
+                  // 金额变化时自动均分
+                  if (selectedUsers.length > 0 && createdBy) {
+                    handleSplitEvenly();
+                  }
+                }}
               />
             </Form.Item>
             
@@ -230,7 +253,12 @@ export default function NewBill() {
               rules={[{ required: true, message: '请选择货币' }]}
               style={{ width: 150 }}
             >
-              <Radio.Group>
+              <Radio.Group onChange={() => {
+                // 货币变化时自动均分
+                if (selectedUsers.length > 0 && createdBy) {
+                  handleSplitEvenly();
+                }
+              }}>
                 <Radio.Button value={CurrencyType.CNY}>CNY</Radio.Button>
                 <Radio.Button value={CurrencyType.JPY}>JPY</Radio.Button>
               </Radio.Group>
@@ -242,10 +270,20 @@ export default function NewBill() {
             label="创建人"
             rules={[{ required: true, message: '请选择创建人' }]}
           >
-            <Select
-              placeholder="选择创建人"
-              options={users.map(user => ({ label: user.name, value: user.id }))}
-            />
+            <Radio.Group onChange={(e) => handleCreatorChange(e.target.value)}>
+              <Row gutter={[16, 8]}>
+                {users.map(user => (
+                  <Col span={8} key={user.id}>
+                    <Radio value={user.id}>
+                      <Space>
+                        <Avatar size="small" icon={<UserOutlined />} />
+                        {user.name}
+                      </Space>
+                    </Radio>
+                  </Col>
+                ))}
+              </Row>
+            </Radio.Group>
           </Form.Item>
           
           <Divider orientation="left">分账设置</Divider>
@@ -254,18 +292,30 @@ export default function NewBill() {
             label="参与用户"
             required
           >
-            <Select
-              mode="multiple"
-              placeholder="选择参与用户"
-              style={{ width: '100%' }}
-              onChange={handleUserSelectChange}
-              options={users.map(user => ({ label: user.name, value: user.id }))}
-            />
+            <Checkbox.Group value={selectedUsers}>
+              <Row gutter={[16, 8]}>
+                {users.map(user => (
+                  <Col span={8} key={user.id}>
+                    <Checkbox 
+                      value={user.id}
+                      checked={selectedUsers.includes(user.id)}
+                      onChange={(e) => handleUserSelectChange(user.id, e.target.checked)}
+                      disabled={false}
+                    >
+                      <Space>
+                        <Avatar size="small" icon={<UserOutlined />} />
+                        {user.name}
+                      </Space>
+                    </Checkbox>
+                  </Col>
+                ))}
+              </Row>
+            </Checkbox.Group>
           </Form.Item>
           
           <Button 
             type="dashed" 
-            onClick={handleSplitEvenly} 
+            onClick={() => handleSplitEvenly()} 
             style={{ marginBottom: 16 }}
             icon={<PlusOutlined />}
             block
@@ -281,8 +331,8 @@ export default function NewBill() {
                   return (
                     <div key={key} style={{ marginBottom: 8, display: 'flex', alignItems: 'center' }}>
                       <div style={{ width: 150, marginRight: 16 }}>
-                        <Tag icon={<UserOutlined />} color="blue">
-                          {getUserName(userId)}
+                        <Tag icon={<UserOutlined />} color={userId === createdBy ? "blue" : "default"}>
+                          {getUserName(userId)} {userId === createdBy && "(创建者)"}
                         </Tag>
                       </div>
                       <Form.Item

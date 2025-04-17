@@ -273,6 +273,11 @@ export const batchUpdateBills = (billIds: string[], action: 'markAsPending' | 'm
   billIds.forEach(billId => {
     const bill = bills.find(b => b.id === billId);
     if (bill) {
+      // 如果账单已合并，则跳过状态更新
+      if (bill.status === BillStatus.MERGED) {
+        return;
+      }
+      
       // 如果是标记为待付款，则直接更新状态
       if (action === 'markAsPending') {
         bill.status = BillStatus.PENDING;
@@ -545,7 +550,7 @@ export const mergeBillsByCurrency = (): Promise<{ [key in CurrencyType]?: Bill[]
         const totalAmount = creditorShares.reduce((sum, share) => sum + share.amount, 0);
         
         // 如果总金额太小，则不创建账单
-        if (totalAmount < 1) { // 改为1分（整数）
+        if (totalAmount < 1) { // 1分（整数）
           pendingOperations--;
           checkIfDone();
           return;
@@ -560,33 +565,26 @@ export const mergeBillsByCurrency = (): Promise<{ [key in CurrencyType]?: Bill[]
         const creditorName = getUserName(creditorId);
         const finalTitle = `【合并账单-${creditorName}】${mergedTitle}${currencyBills.length > 2 ? '等' : ''}`;
         
-        // 创建合并账单
+        // 在这里将整数分金额转回元单位，以便在addBill中正确处理
+        // 注意：totalAmount是整数分，需要除以100变回元，但addBill会再乘100
         const mergedBill: Omit<Bill, 'id' | 'createdAt'> = {
           title: finalTitle,
           description: `自动合并的${currencyType}账单，收款人: ${creditorName}，包含${currencyBills.length}个原始账单`,
-          totalAmount: totalAmount, // 总金额已经是整数分，无需再转换
-          createdBy: creditorId, 
-          status: BillStatus.PENDING, 
-          shares: creditorShares,
+          totalAmount: totalAmount / 100, // 将整数分转回元
+          createdBy: creditorId,
+          status: BillStatus.PENDING,
+          shares: creditorShares.map(share => ({
+            ...share,
+            amount: share.amount / 100 // 将整数分转回元
+          })),
           currency: currencyType,
         };
         
         try {
           // 确保在多次快速操作时ID不会冲突，添加小延迟
           setTimeout(() => {
-            // 添加合并账单前先将金额转回显示单位，因为addBill会再次进行转换
-            // 这样可以避免重复转换问题
-            const displayMergedBill = {
-              ...mergedBill,
-              totalAmount: parseFloat(fenToYuan(mergedBill.totalAmount, mergedBill.currency)),
-              shares: mergedBill.shares.map(share => ({
-                ...share,
-                amount: parseFloat(fenToYuan(share.amount, mergedBill.currency))
-              }))
-            };
-            
             // 添加合并账单
-            const newBill = addBill(displayMergedBill);
+            const newBill = addBill(mergedBill);
             
             // 将新创建的账单添加到结果中
             if (!result[currencyType]) {
@@ -649,4 +647,20 @@ export const getUserName = (userId: string): string => {
   
   const user = getUsers().find(u => u.id === userId);
   return user ? user.name : '未知用户';
+};
+
+// 批量删除账单
+export const batchDeleteBills = (billIds: string[]): boolean => {
+  if (!billIds || billIds.length === 0) return false;
+  
+  const bills = getBills();
+  const initialLength = bills.length;
+  const filteredBills = bills.filter(bill => !billIds.includes(bill.id));
+  
+  if (filteredBills.length === initialLength) {
+    return false; // 没有找到要删除的账单
+  }
+  
+  localStorage.setItem(STORAGE_KEYS.BILLS, JSON.stringify(filteredBills));
+  return true;
 }; 

@@ -8,9 +8,10 @@ import {
   getBillsByUser,
   mergeBillsByCurrency,
   getUserName,
-  fenToYuan
+  fenToYuan,
+  batchDeleteBills
 } from '../../services/dataService';
-import { Bill, User, CurrencyType } from '../../types';
+import { Bill, User, CurrencyType, BillStatus } from '../../types';
 import { 
   Table, 
   Card, 
@@ -28,7 +29,8 @@ import {
   Row,
   Col,
   message,
-  App
+  App,
+  Modal
 } from 'antd';
 import { 
   UserOutlined, 
@@ -40,7 +42,8 @@ import {
   ClockCircleOutlined,
   ExclamationCircleOutlined,
   DollarOutlined,
-  NodeIndexOutlined
+  NodeIndexOutlined,
+  DeleteOutlined
 } from '@ant-design/icons';
 
 export default function BillsPage() {
@@ -52,7 +55,7 @@ export default function BillsPage() {
   const [filterType, setFilterType] = useState<'all' | 'toPay' | 'toReceive'>('all');
   const [filterCurrency, setFilterCurrency] = useState<CurrencyType | ''>('');
   const [merging, setMerging] = useState(false);
-  const { message: messageApi } = App.useApp();
+  const { message: messageApi, modal: modalApi } = App.useApp();
 
   // 加载数据
   const loadData = () => {
@@ -101,17 +104,70 @@ export default function BillsPage() {
     setSelectedRowKeys([]);
   };
 
+  // 批量删除账单
+  const handleBatchDelete = () => {
+    if (selectedRowKeys.length === 0) {
+      messageApi.warning('请至少选择一个账单');
+      return;
+    }
+    
+    modalApi.confirm({
+      title: '确认删除',
+      content: `确定要删除选中的 ${selectedRowKeys.length} 个账单吗？此操作不可撤销！`,
+      okText: '确认删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: () => {
+        const success = batchDeleteBills(selectedRowKeys);
+        if (success) {
+          messageApi.success(`成功删除 ${selectedRowKeys.length} 个账单`);
+          loadData();
+          setSelectedRowKeys([]);
+        } else {
+          messageApi.error('删除失败');
+        }
+      }
+    });
+  };
+
   // 处理一键合账
   const handleMergeBills = async () => {
     // 设置合并中状态，禁用按钮
     setMerging(true);
     
     try {
+      // 先检查是否有足够的待付款账单可以合并
+      const allBills = getBills();
+      // 只考虑待付款(PENDING)状态的账单，忽略待出账(UNPAID)状态的账单
+      const pendingBills = allBills.filter(bill => bill.status === BillStatus.PENDING);
+      
+      // 按币种分组计数
+      const billCountByCurrency: Record<CurrencyType, number> = {
+        [CurrencyType.CNY]: 0,
+        [CurrencyType.JPY]: 0,
+      };
+      
+      pendingBills.forEach(bill => {
+        billCountByCurrency[bill.currency]++;
+      });
+      
+      // 检查每种币种是否有至少两个账单可以合并
+      const hasMergeableBills = Object.values(billCountByCurrency).some(count => count >= 2);
+      
+      if (!hasMergeableBills) {
+        messageApi.warning('没有可合并的账单，需要至少两个相同币种的待付款账单');
+        setMerging(false);
+        return;
+      }
+      
+      // 进行合账操作，mergeBillsByCurrency函数内部会筛选待付款账单
       const result = await mergeBillsByCurrency();
       const currencies = Object.keys(result);
       
+      // 检查是否有成功合并的账单
       if (currencies.length === 0 || currencies.every(currency => !result[currency as CurrencyType]?.length)) {
-        messageApi.warning('没有可合并的账单，需要至少两个相同币种的待付款账单');
+        messageApi.warning('合并失败，请检查待付款账单的状态');
+        setMerging(false);
         return;
       }
       
@@ -335,29 +391,33 @@ export default function BillsPage() {
               一键合账
             </Button>
             
-            <Dropdown
+            <Button 
+              type="primary"
+              icon={<ClockCircleOutlined />}
+              onClick={() => handleBatchAction('markAsPending')}
               disabled={selectedRowKeys.length === 0}
-              menu={{
-                items: [
-                  {
-                    key: '1',
-                    label: '标记为待付款',
-                    icon: <ClockCircleOutlined />,
-                    onClick: () => handleBatchAction('markAsPending')
-                  },
-                  {
-                    key: '2',
-                    label: '标记为已完成',
-                    icon: <CheckCircleOutlined />,
-                    onClick: () => handleBatchAction('markAsCompleted')
-                  }
-                ]
-              }}
             >
-              <Button type="primary" disabled={selectedRowKeys.length === 0}>
-                批量操作 <DownOutlined />
-              </Button>
-            </Dropdown>
+              标记待付款
+            </Button>
+            
+            <Button 
+              type="primary"
+              icon={<CheckCircleOutlined />}
+              onClick={() => handleBatchAction('markAsCompleted')}
+              disabled={selectedRowKeys.length === 0}
+            >
+              标记已完成
+            </Button>
+            
+            <Button 
+              type="primary" 
+              danger
+              icon={<DeleteOutlined />}
+              onClick={handleBatchDelete}
+              disabled={selectedRowKeys.length === 0}
+            >
+              批量删除
+            </Button>
           </Space>
         }
       >
