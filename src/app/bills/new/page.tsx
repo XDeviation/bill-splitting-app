@@ -7,8 +7,6 @@ import {
   InputNumber, 
   Button, 
   Card, 
-  Select, 
-  DatePicker, 
   Divider, 
   Tag, 
   Space, 
@@ -17,14 +15,12 @@ import {
   Checkbox,
   Row,
   Col,
-  Avatar
+  Avatar 
 } from 'antd';
 import { 
   FileTextOutlined, 
-  DeleteOutlined, 
   PlusOutlined,
-  UserOutlined,
-  CalendarOutlined 
+  UserOutlined
 } from '@ant-design/icons';
 import { getUsers, addBill, yuanToFen, fenToYuan } from '../../../services/dataService';
 import { User, CurrencyType, BillStatus, BillShare } from '../../../types';
@@ -82,7 +78,7 @@ export default function NewBill() {
   const updateShares = (userIds: string[], creator: string) => {
     const prevShares = form.getFieldValue('shares') || [];
     const newShares = userIds.map(userId => {
-      const existingShare = prevShares.find((share: any) => share.userId === userId);
+      const existingShare = prevShares.find((share: BillShare) => share.userId === userId);
       return existingShare || { 
         userId, 
         amount: 0, 
@@ -100,7 +96,6 @@ export default function NewBill() {
     creator = creator || form.getFieldValue('createdBy');
     
     const totalAmount = form.getFieldValue('totalAmount') || 0;
-    const currency = form.getFieldValue('currency') || CurrencyType.CNY;
     
     if (totalAmount <= 0) {
       message.warning('请先输入总金额');
@@ -118,7 +113,7 @@ export default function NewBill() {
     }
     
     // 先将金额转为整数（分）
-    const totalAmountInFen = yuanToFen(totalAmount, currency);
+    const totalAmountInFen = yuanToFen(totalAmount);
     
     // 创建者可以不是参与用户，不再检查创建者是否在参与用户列表中
     
@@ -129,7 +124,7 @@ export default function NewBill() {
     let remainingFen = totalAmountInFen - (amountPerPersonInFen * userIds.length);
     
     // 创建分账
-    const shares = userIds.map((userId, index) => {
+    const shares = userIds.map(userId => {
       // 计算该用户应付的金额
       let userAmountInFen = amountPerPersonInFen;
       
@@ -140,7 +135,7 @@ export default function NewBill() {
       }
       
       // 将整数分转回显示用的元
-      const displayAmount = parseFloat(fenToYuan(userAmountInFen, currency));
+      const displayAmount = parseFloat(fenToYuan(userAmountInFen));
       
       return {
         userId,
@@ -154,13 +149,10 @@ export default function NewBill() {
   };
 
   // 提交表单
-  const handleSubmit = (values: any) => {
-    const createdBy = values.createdBy;
-    const currency = values.currency;
-    
+  const handleSubmit = (values: Record<string, unknown>) => {
     // 确保分账金额总和等于总金额
-    const totalAmount = values.totalAmount;
-    const sharesTotal = values.shares.reduce((sum: number, share: BillShare) => sum + share.amount, 0);
+    const totalAmount = values.totalAmount as number;
+    const sharesTotal = (values.shares as BillShare[]).reduce((sum, share) => sum + share.amount, 0);
     
     // 允许有小误差（小于1分钱）
     if (Math.abs(totalAmount - sharesTotal) > 0.01) {
@@ -170,13 +162,13 @@ export default function NewBill() {
     
     // 创建账单对象
     const bill = {
-      title: values.title,
-      description: values.description,
+      title: values.title as string,
+      description: values.description as string,
       totalAmount: totalAmount, // 这里传入的是显示金额（元），服务层会转为整数（分）
-      createdBy: values.createdBy,
+      createdBy: values.createdBy as string,
       status: BillStatus.UNPAID, // 默认为未出账状态
-      shares: values.shares,
-      currency: values.currency,
+      shares: values.shares as BillShare[],
+      currency: values.currency as CurrencyType,
     };
     
     // 添加账单
@@ -324,7 +316,7 @@ export default function NewBill() {
           </Button>
           
           <Form.List name="shares">
-            {(fields, { add, remove }) => (
+            {(fields) => (
               <>
                 {fields.map(({ key, name, ...restField }) => {
                   const userId = form.getFieldValue(['shares', name, 'userId']);

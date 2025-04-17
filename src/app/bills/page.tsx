@@ -21,16 +21,10 @@ import {
   Empty, 
   Tooltip, 
   Space, 
-  Dropdown, 
-  Menu,
-  Checkbox,
+  Dropdown,
   Select,
   Segmented,
-  Row,
-  Col,
-  message,
-  App,
-  Modal
+  App
 } from 'antd';
 import { 
   UserOutlined, 
@@ -41,7 +35,6 @@ import {
   CheckCircleOutlined,
   ClockCircleOutlined,
   ExclamationCircleOutlined,
-  DollarOutlined,
   NodeIndexOutlined,
   DeleteOutlined
 } from '@ant-design/icons';
@@ -82,6 +75,7 @@ export default function BillsPage() {
 
   useEffect(() => {
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterUser, filterType, filterCurrency]);
 
   // 批量操作
@@ -216,7 +210,7 @@ export default function BillsPage() {
       key: 'totalAmount',
       width: '15%',
       render: (amount: number, record: Bill) => 
-        `${fenToYuan(amount, record.currency)} ${record.currency}`,
+        `${fenToYuan(amount)} ${record.currency}`,
     },
     {
       title: '货币',
@@ -282,7 +276,7 @@ export default function BillsPage() {
       title: '操作',
       key: 'action',
       width: '10%',
-      render: (_: any, record: Bill) => (
+      render: (_: unknown, record: Bill) => (
         <Tooltip title="查看详情">
           <Link href={`/bills/${record.id}`}>
             <Button type="link" size="small" icon={<ArrowRightOutlined />}>

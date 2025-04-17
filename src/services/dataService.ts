@@ -66,12 +66,13 @@ export const getBills = (): Bill[] => {
 };
 
 // 将元转换为分（整数）
-export const yuanToFen = (yuan: number, currency: CurrencyType): number => {
+export const yuanToFen = (yuan: number): number => {
+  // 所有币种都乘以100进行整数计算
   return Math.round(yuan * 100);
 };
 
 // 将分转换为元（显示用）
-export const fenToYuan = (fen: number, currency: CurrencyType): string => {
+export const fenToYuan = (fen: number): string => {
   return (fen / 100).toFixed(2);
 };
 
@@ -81,7 +82,7 @@ export const addBill = (bill: Omit<Bill, 'id' | 'createdAt'>): Bill => {
   let shares = [...bill.shares];
   
   // 将totalAmount从元转换为分（整数）
-  const totalAmountInFen = yuanToFen(bill.totalAmount, bill.currency);
+  const totalAmountInFen = yuanToFen(bill.totalAmount);
   
   // 如果需要均分账单
   if (shares.every(share => share.amount === 0)) {
@@ -135,7 +136,7 @@ export const addBill = (bill: Omit<Bill, 'id' | 'createdAt'>): Bill => {
     // 如果已经设置了金额（手动输入），则将金额从元转为分
     shares = shares.map(share => ({
       ...share,
-      amount: yuanToFen(share.amount, bill.currency)
+      amount: yuanToFen(share.amount)
     }));
   }
   
@@ -219,11 +220,11 @@ export const calculateSettlements = (): Settlement[] => {
     
     // 计算最终的结算方案
     const debtors = Object.entries(balances)
-      .filter(([_, balance]) => balance < 0)
+      .filter(([, balance]) => balance < 0)
       .sort((a, b) => a[1] - b[1]); // 从欠得最多的开始
     
     const creditors = Object.entries(balances)
-      .filter(([_, balance]) => balance > 0)
+      .filter(([, balance]) => balance > 0)
       .sort((a, b) => b[1] - a[1]); // 从收得最多的开始
     
     let debtorIndex = 0;
@@ -417,6 +418,14 @@ export const deleteBill = (billId: string): boolean => {
   return true;
 };
 
+// 在getUserName函数中添加对空用户ID的处理
+export const getUserName = (userId: string): string => {
+  if (!userId) return '系统';
+  
+  const user = getUsers().find(u => u.id === userId);
+  return user ? user.name : '未知用户';
+};
+
 // 一键合账功能
 export const mergeBillsByCurrency = (): Promise<{ [key in CurrencyType]?: Bill[] }> => {
   return new Promise((resolve) => {
@@ -439,6 +448,14 @@ export const mergeBillsByCurrency = (): Promise<{ [key in CurrencyType]?: Bill[]
     
     let pendingOperations = 0;
     let allDone = false;
+    
+    // 检查是否所有操作都已完成
+    function checkIfDone() {
+      if (pendingOperations === 0 && !allDone) {
+        allDone = true;
+        resolve(result);
+      }
+    }
     
     // 处理每一种货币类型
     Object.entries(billsByCurrency).forEach(([currency, currencyBills]) => {
@@ -475,12 +492,12 @@ export const mergeBillsByCurrency = (): Promise<{ [key in CurrencyType]?: Bill[]
       
       // 获取所有净收款方（余额为正）的用户
       const creditors = Object.entries(userBalances)
-        .filter(([_, balance]) => balance > 0)
+        .filter(([, balance]) => balance > 0)
         .sort((a, b) => b[1] - a[1]); // 按金额降序
       
       // 获取所有需要付款的用户（余额为负）
       const debtors = Object.entries(userBalances)
-        .filter(([_, balance]) => balance < 0)
+        .filter(([, balance]) => balance < 0)
         .sort((a, b) => a[1] - b[1]); // 按欠款多少排序
       
       if (creditors.length === 0 || debtors.length === 0) return; // 如果没有净收款方或付款方，则不需要合并
@@ -488,7 +505,6 @@ export const mergeBillsByCurrency = (): Promise<{ [key in CurrencyType]?: Bill[]
       // 收集要标记为已合账的原始账单ID
       const originalBillIds = currencyBills.map(bill => bill.id);
       
-      // 修复：避免在循环中使用indexOf，因为它可能创建错误的索引
       // 为每个收款人创建一个合并账单
       pendingOperations += creditors.length + 1; // 每个收款人的账单 + 最后的状态更新
       
@@ -496,7 +512,7 @@ export const mergeBillsByCurrency = (): Promise<{ [key in CurrencyType]?: Bill[]
         const [creditorId, creditorBalance] = creditor;
         
         // 深拷贝付款人列表，以便在处理过程中修改
-        let remainingDebtors = [...debtors];
+        const remainingDebtors = [...debtors];
         let totalCollectedForCreditor = 0;
         const creditorShares: BillShare[] = [];
         
@@ -515,7 +531,7 @@ export const mergeBillsByCurrency = (): Promise<{ [key in CurrencyType]?: Bill[]
             // 添加到该收款人的分账中（金额已经是整数分）
             creditorShares.push({
               userId: debtorId,
-              amount: amountToAllocate,
+              amount: amountToAllocate, // 保持整数分，不需要转换
               paid: false
             });
             
@@ -630,23 +646,7 @@ export const mergeBillsByCurrency = (): Promise<{ [key in CurrencyType]?: Bill[]
       resolve(result);
       return;
     }
-    
-    // 检查是否所有操作都已完成
-    function checkIfDone() {
-      if (pendingOperations === 0 && !allDone) {
-        allDone = true;
-        resolve(result);
-      }
-    }
   });
-};
-
-// 在getUserName函数中添加对空用户ID的处理
-export const getUserName = (userId: string): string => {
-  if (!userId) return '系统';
-  
-  const user = getUsers().find(u => u.id === userId);
-  return user ? user.name : '未知用户';
 };
 
 // 批量删除账单
@@ -663,4 +663,4 @@ export const batchDeleteBills = (billIds: string[]): boolean => {
   
   localStorage.setItem(STORAGE_KEYS.BILLS, JSON.stringify(filteredBills));
   return true;
-}; 
+};
